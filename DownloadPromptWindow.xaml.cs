@@ -18,6 +18,17 @@ public sealed partial class DownloadPromptWindow : Window
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern bool BringWindowToTop(IntPtr hWnd);
 
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern void SwitchToThisWindow(IntPtr hWnd, bool fAltTab);
+
+    private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
+    private static readonly IntPtr HWND_NOTOPMOST = new IntPtr(-2);
+    private const uint SWP_NOMOVE = 0x0002;
+    private const uint SWP_NOSIZE = 0x0001;
+    private const uint SWP_SHOWWINDOW = 0x0040;
     private const int SW_RESTORE = 9;
     private const int SW_SHOW = 5;
 
@@ -28,7 +39,7 @@ public sealed partial class DownloadPromptWindow : Window
         InitializeComponent();
 
         Title = $"Download - {item.Title}";
-        AppWindow.Resize(new Windows.Graphics.SizeInt32(660, 440));
+        AppWindow.Resize(new Windows.Graphics.SizeInt32(700, 480));
 
         // Center dialog window on the active display
         try
@@ -37,8 +48,8 @@ public sealed partial class DownloadPromptWindow : Window
             if (displayArea != null)
             {
                 var workArea = displayArea.WorkArea;
-                int x = workArea.X + (workArea.Width - 660) / 2;
-                int y = workArea.Y + (workArea.Height - 440) / 2;
+                int x = workArea.X + (workArea.Width - 700) / 2;
+                int y = workArea.Y + (workArea.Height - 480) / 2;
                 AppWindow.Move(new Windows.Graphics.PointInt32(x, y));
             }
         }
@@ -59,7 +70,11 @@ public sealed partial class DownloadPromptWindow : Window
             var hWnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
             ShowWindow(hWnd, SW_RESTORE);
             BringWindowToTop(hWnd);
+            // Briefly set TOPMOST and then NOTOPMOST to force window to pop in front of any full screen or browser window
+            SetWindowPos(hWnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+            SetWindowPos(hWnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
             SetForegroundWindow(hWnd);
+            SwitchToThisWindow(hWnd, true);
         }
         catch { }
     }

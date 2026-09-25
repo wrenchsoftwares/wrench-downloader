@@ -32,7 +32,7 @@ public class DownloadEngine
         if (!Directory.Exists(downloadsFolder)) Directory.CreateDirectory(downloadsFolder);
 
         // Check if the URL needs stream demuxing (page or manifest) vs direct fetch.
-        if (IsStreamingSite(item.Url))
+        if (IsStreamingSite(item))
         {
             await DownloadStreamingSiteAsync(item, downloadsFolder, cancellationToken);
         }
@@ -46,9 +46,17 @@ public class DownloadEngine
     // looks like a stream (manifest/playlist/chunk) or a page (no static
     // file extension). Anything else downloads directly; if the server
     // answers with a stream content-type we re-route (see DownloadDirectHttpAsync).
-    private static bool IsStreamingSite(string url)
+    private static bool IsStreamingSite(DownloadItem item)
     {
-        if (string.IsNullOrWhiteSpace(url)) return false;
+        if (item == null || string.IsNullOrWhiteSpace(item.Url)) return false;
+
+        // If the browser extension explicitly categorized this as a file download, do direct download
+        if (string.Equals(item.Quality, "file", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        string url = item.Url;
         string lower = url.ToLowerInvariant();
 
         // 1. Stream manifests, playlists, and chunk endpoints
@@ -64,10 +72,25 @@ public class DownloadEngine
             return true;
         }
 
-        // 2. Web pages (not static file extensions like .zip, .exe, .rar, .pdf, .iso, etc.)
+        // 2. If the URL has a filename query parameter (e.g. slug=win64.exe.zip, file=abc.zip), direct download
         try
         {
             var uri = new Uri(url);
+            var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+            foreach (string? key in query.AllKeys)
+            {
+                if (key != null && (key.Equals("slug", StringComparison.OrdinalIgnoreCase) || 
+                                    key.Equals("file", StringComparison.OrdinalIgnoreCase) || 
+                                    key.Equals("filename", StringComparison.OrdinalIgnoreCase)))
+                {
+                    string val = query[key] ?? "";
+                    if (val.Contains('.') && !val.EndsWith(".html", StringComparison.OrdinalIgnoreCase) && !val.EndsWith(".php", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return false;
+                    }
+                }
+            }
+
             string ext = Path.GetExtension(uri.AbsolutePath).ToLowerInvariant();
             if (string.IsNullOrEmpty(ext) || ext == ".html" || ext == ".htm" || ext == ".php" || ext == ".asp" || ext == ".aspx")
             {

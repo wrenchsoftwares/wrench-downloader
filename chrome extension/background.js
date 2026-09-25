@@ -5,7 +5,27 @@
 
 const mediaByTab = new Map();
 const requestHeadersMap = new Map(); // url -> { referer, userAgent }
+const contentDispositionMap = new Map(); // url -> server filename
 const APP_SERVER_URL = "http://127.0.0.1:45732/api/download";
+
+function parseContentDispositionFilename(headerVal) {
+  if (!headerVal) return "";
+  try {
+    // 1. Check filename*=UTF-8''... (RFC 5987 / RFC 6266)
+    const starMatch = headerVal.match(/filename\*=([^;']+''|[^;']*;)?([^;]+)/i);
+    if (starMatch && starMatch[2]) {
+      let raw = starMatch[2].trim().replace(/^["']|["']$/g, "");
+      return decodeURIComponent(raw);
+    }
+    // 2. Standard filename="..." or filename=...
+    const stdMatch = headerVal.match(/filename\s*=\s*(?:"([^"]+)"|'([^']+)'|([^;\s]+))/i);
+    if (stdMatch) {
+      let raw = (stdMatch[1] || stdMatch[2] || stdMatch[3] || "").trim();
+      return raw.replace(/^.*[\\\/]/, "");
+    }
+  } catch (e) {}
+  return "";
+}
 
 // 1. Capture request headers (Referer, User-Agent) before sending
 chrome.webRequest.onBeforeSendHeaders.addListener(
@@ -62,12 +82,25 @@ chrome.webRequest.onHeadersReceived.addListener(
 
     let contentType = "";
     let contentLength = 0;
+    let contentDisposition = "";
 
     if (details.responseHeaders) {
       for (const h of details.responseHeaders) {
         const name = h.name.toLowerCase();
         if (name === "content-type") contentType = (h.value || "").toLowerCase();
         if (name === "content-length") contentLength = parseInt(h.value || "0", 10);
+        if (name === "content-disposition") contentDisposition = h.value || "";
+      }
+    }
+
+    if (contentDisposition) {
+      const serverFileName = parseContentDispositionFilename(contentDisposition);
+      if (serverFileName) {
+        contentDispositionMap.set(url, serverFileName);
+        if (contentDispositionMap.size > 200) {
+          const firstKey = contentDispositionMap.keys().next().value;
+          contentDispositionMap.delete(firstKey);
+        }
       }
     }
 
@@ -196,53 +229,92 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // and hand them over to Wrench Downloader app.
 const interceptedDownloadIds = new Set();
 
+async function handleInterceptedDownload(downloadItem) {
+  try {
+    if (!downloadItem || !downloadItem.url) return;
+    const url = downloadItem.finalUrl || downloadItem.url;
+
+    // Do not intercept data URIs or blob URIs created internally by pages
+    if (url.startsWith("data:") || url.startsWith("blob:") || url.startsWith("chrome-extension://")) {
+      return;
+    }
+
+    if (interceptedDownloadIds.has(downloadItem.id)) return;
+    interceptedDownloadIds.add(downloadItem.id);
+
+    // Cancel the browser's native download so Wrench Downloader takes over
+    try {
+      await chrome.downloads.cancel(downloadItem.id);
+      await chrome.downloads.erase({ id: downloadItem.id });
+    } catch (e) {}
+
+    // Priority for filename sent by the server / page:
+    // 1. downloadItem.filename (available in onDeterminingFilename after server headers/redirects)
+    // 2. Server Content-Disposition header recorded from webRequest
+    // 3. Fallback to URL query slug / path parameters
+    let rawFilename = downloadItem.filename ? downloadItem.filename.replace(/^.*[\\\/]/, "").trim() : "";
+    if (!rawFilename) {
+      rawFilename = contentDispositionMap.get(url) || contentDispositionMap.get(downloadItem.url) || "";
+    }
+    let title = rawFilename || guessTitle(url) || guessTitle(downloadItem.url);
+    if (!title || title.toLowerCase() === "download") {
+      title = guessTitle(url);
+    }
+
+    // Retrieve captured headers (Referer, User-Agent)
+    const headers = requestHeadersMap.get(url) || requestHeadersMap.get(downloadItem.url) || {};
+
+    const payload = {
+      url: url,
+      title: title,
+      quality: "file",
+      format: title.includes(".") ? title.split(".").pop().toLowerCase() : "",
+      pageUrl: downloadItem.referrer || "",
+      referrer: headers.referer || downloadItem.referrer || "",
+      userAgent: headers.userAgent || navigator.userAgent,
+      prompt: true
+    };
+
+    await sendToDesktopApp(payload);
+  } catch (err) {
+    console.warn("Could not forward browser download to Wrench Downloader:", err);
+  }
+}
+
+// 1. chrome.downloads.onDeterminingFilename fires AFTER server headers (Content-Disposition, redirects) have arrived
+if (chrome.downloads && chrome.downloads.onDeterminingFilename) {
+  chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
+    chrome.storage.local.get({ interceptDownloads: true }).then((settings) => {
+      if (settings.interceptDownloads !== false) {
+        handleInterceptedDownload(downloadItem);
+      } else {
+        suggest(); // Let Chrome proceed normally
+      }
+    }).catch(() => suggest());
+
+    return true; // Keep suggest callback valid asynchronously
+  });
+}
+
+// 2. Fallback onCreated in case onDeterminingFilename is not triggered
 if (chrome.downloads && chrome.downloads.onCreated) {
   chrome.downloads.onCreated.addListener(async (downloadItem) => {
-    try {
-      // Check if user has enabled download interception
-      const settings = await chrome.storage.local.get({ interceptDownloads: true });
-      if (settings.interceptDownloads === false) {
-        return;
-      }
+    // If onDeterminingFilename is supported, give it a moment to fire first
+    if (chrome.downloads.onDeterminingFilename) {
+      setTimeout(async () => {
+        if (!interceptedDownloadIds.has(downloadItem.id)) {
+          const settings = await chrome.storage.local.get({ interceptDownloads: true });
+          if (settings.interceptDownloads !== false) {
+            handleInterceptedDownload(downloadItem);
+          }
+        }
+      }, 700);
+      return;
+    }
 
-      if (!downloadItem || !downloadItem.url) return;
-      const url = downloadItem.url;
-
-      // Do not intercept data URIs or blob URIs created internally by pages
-      if (url.startsWith("data:") || url.startsWith("blob:") || url.startsWith("chrome-extension://")) {
-        return;
-      }
-
-      if (interceptedDownloadIds.has(downloadItem.id)) return;
-      interceptedDownloadIds.add(downloadItem.id);
-
-      // Cancel the browser's native download so Wrench Downloader takes over
-      try {
-        await chrome.downloads.cancel(downloadItem.id);
-        await chrome.downloads.erase({ id: downloadItem.id });
-      } catch (e) {}
-
-      // Retrieve captured headers (Referer, User-Agent)
-      const headers = requestHeadersMap.get(url) || {};
-      let title = downloadItem.filename ? downloadItem.filename.replace(/^.*[\\\/]/, "") : guessTitle(url);
-      if (!title || title === "download") {
-        title = guessTitle(url);
-      }
-
-      const payload = {
-        url: url,
-        title: title,
-        quality: "file",
-        format: title.includes(".") ? title.split(".").pop().toLowerCase() : "",
-        pageUrl: downloadItem.referrer || "",
-        referrer: headers.referer || downloadItem.referrer || "",
-        userAgent: headers.userAgent || navigator.userAgent,
-        prompt: true
-      };
-
-      await sendToDesktopApp(payload);
-    } catch (err) {
-      console.warn("Could not forward browser download to Wrench Downloader:", err);
+    const settings = await chrome.storage.local.get({ interceptDownloads: true });
+    if (settings.interceptDownloads !== false) {
+      handleInterceptedDownload(downloadItem);
     }
   });
 }

@@ -1,4 +1,4 @@
-# 🔧 Wrench Downloader v26.1.2
+# 🔧 Wrench Downloader v26.1.3
 
 > High-speed multi-threaded media and file downloader with integrated Chrome Companion stream sniffer. An ultra-fast, modern alternative to IDM built with .NET 9 and Windows App SDK (WinUI 3).
 
@@ -33,7 +33,7 @@ dotnet run --project WrenchDownloader.csproj
 ```
 
 ### 3. Create a Release Package
-Run `./release.ps1` from PowerShell. It publishes a self-contained Windows x64 portable package at `artifacts/releases/26.1.2/WrenchDownloader-26.1.2-win-x64.zip`. Extract it to a writable folder and run `WrenchDownloader.exe` in the master folder. The Chrome extension is in `chrome extension`, app dependencies are grouped under `Runtime`, and settings, history, and startup logs stay in `Data`.
+Run `./release.ps1` from PowerShell. It publishes a self-contained Windows x64 portable package at `artifacts/releases/26.1.3/WrenchDownloader-26.1.3-win-x64.zip`. Extract it to a writable folder and run `WrenchDownloader.exe` in the master folder. The Chrome extension is in `chrome extension`, app dependencies are grouped under `Runtime`, and settings, history, and startup logs stay in `Data`.
 
 The package includes the application resource index (`WrenchDownloader.pri`) beside the executable so WinUI can resolve its XAML resources at startup. Downloads are saved to the user's Downloads folder by default.
 
@@ -55,12 +55,12 @@ wrench-downloader/
 ├── ExtensionBridgeServer.cs      # Local HTTP bridge server for Chrome extension
 ├── MainWindow.xaml               # Main dashboard & download queue
 ├── SettingsDialog.cs             # App settings & configuration
-├── Package.appxmanifest          # App package manifest (v26.1.2)
+├── Package.appxmanifest          # App package manifest (v26.1.3)
 ├── chrome extension/             # Chrome Manifest V3 Companion extension
 │   ├── injected.js               # In-page fetch / XHR stream interceptor
 │   ├── content.js                # Video detector & floating download overlay
 │   ├── background.js             # Network request sniffer & desktop bridge
-│   └── manifest.json             # Extension manifest (v26.1.2)
+│   └── manifest.json             # Extension manifest (v26.1.3)
 ├── tests/                        # Playwright verification and integration scripts
 ├── push.bat                      # Windows one-click script to stage, commit & push to main
 ├── push.ps1                      # PowerShell script to push to main

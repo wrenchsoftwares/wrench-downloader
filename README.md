@@ -33,7 +33,7 @@ dotnet run --project WrenchDownloader.csproj
 ```
 
 ### 3. Create a Release Package
-Run `./release.ps1` from PowerShell. It publishes a self-contained Windows x64 portable package at `artifacts/releases/26.1.2/WrenchDownloader-26.1.2-win-x64.zip`. Extract it to a writable folder and run `Start Wrench Downloader.cmd`. App settings, history, and startup logs stay in the package's `Data` folder. The app runtime and unpacked browser extension are separated into `Wrench Downloader` and `Chrome Companion` folders.
+Run `./release.ps1` from PowerShell. It publishes a self-contained Windows x64 portable package at `artifacts/releases/26.1.2/WrenchDownloader-26.1.2-win-x64.zip`. Extract it to a writable folder and run `WrenchDownloader.exe` in the master folder. The Chrome extension is in `chrome extension`, app dependencies are grouped under `Runtime`, and settings, history, and startup logs stay in `Data`.
 
 The package includes the application resource index (`WrenchDownloader.pri`) beside the executable so WinUI can resolve its XAML resources at startup. Downloads are saved to the user's Downloads folder by default.
 
@@ -41,7 +41,7 @@ The package includes the application resource index (`WrenchDownloader.pri`) bes
 1. Open Google Chrome (or Edge/Brave/Chromium).
 2. Navigate to `chrome://extensions/`.
 3. Enable **Developer mode** in the top right corner.
-4. Click **Load unpacked** and select `Chrome Companion` from the extracted release ZIP, or `chrome extension` from this repository.
+4. Click **Load unpacked** and select `chrome extension` from the extracted release ZIP or repository.
 5. The extension will automatically connect to Wrench Downloader's local bridge on `http://127.0.0.1:45732`.
 
 ---

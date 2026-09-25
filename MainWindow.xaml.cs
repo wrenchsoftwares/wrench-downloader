@@ -403,6 +403,41 @@ public sealed partial class MainWindow : Window
         return selected;
     }
 
+    private void OnTogglePauseDownloadClick(object sender, RoutedEventArgs e)
+    {
+        var targets = GetTargetItems(sender);
+        if (targets.Count == 0) return;
+
+        foreach (var item in targets)
+        {
+            if (item.IsActive)
+            {
+                // Pause active download
+                item.Cancel();
+                item.Status = DownloadStatus.Paused;
+                item.SpeedText = "Paused";
+                item.StatusText = "Paused by user";
+                StatusTextBlock.Text = $"Paused download: {item.Title}";
+            }
+            else if (item.Status == DownloadStatus.Paused || item.Status == DownloadStatus.Failed)
+            {
+                // Resume download
+                var token = item.ResetCancellationToken();
+                item.Status = DownloadStatus.Queued;
+                item.SpeedText = "Resuming...";
+                item.StatusText = "Connecting...";
+                StatusTextBlock.Text = $"Resumed download: {item.Title}";
+
+                _ = Task.Run(async () =>
+                {
+                    await DownloadEngine.StartDownloadAsync(item, token);
+                    SaveHistory();
+                });
+            }
+        }
+        SaveHistory();
+    }
+
     private void OnDeleteDownloadedFileClick(object sender, RoutedEventArgs e)
     {
         var targets = GetTargetItems(sender);

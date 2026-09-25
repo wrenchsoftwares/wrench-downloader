@@ -87,6 +87,12 @@
                             Margin="0,0,0,8">
                         <Border.ContextFlyout>
                             <MenuFlyout>
+                                <MenuFlyoutItem Text="Pause / Resume" Click="OnTogglePauseDownloadClick">
+                                    <MenuFlyoutItem.Icon>
+                                        <FontIcon Glyph="&#xE768;" />
+                                    </MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <MenuFlyoutSeparator />
                                 <MenuFlyoutItem Text="Remove from List" Click="OnRemoveDownloadClick">
                                     <MenuFlyoutItem.Icon>
                                         <FontIcon Glyph="&#xE74D;" />
@@ -117,23 +123,42 @@
                             </MenuFlyout>
                         </Border.ContextFlyout>
                         <Grid>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
 
-                            <Grid Grid.Row="0">
-                                <TextBlock Text="{x:Bind Title, Mode=OneWay}" FontWeight="SemiBold" FontSize="14" TextTrimming="CharacterEllipsis" MaxLines="1" />
-                                <TextBlock Text="{x:Bind SpeedText, Mode=OneWay}" HorizontalAlignment="Right" FontSize="12" FontWeight="SemiBold" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                            <Grid Grid.Column="0">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+
+                                <Grid Grid.Row="0">
+                                    <TextBlock Text="{x:Bind Title, Mode=OneWay}" FontWeight="SemiBold" FontSize="14" TextTrimming="CharacterEllipsis" MaxLines="1" Margin="0,0,8,0" />
+                                    <TextBlock Text="{x:Bind SpeedText, Mode=OneWay}" HorizontalAlignment="Right" FontSize="12" FontWeight="SemiBold" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                                </Grid>
+
+                                <ProgressBar Grid.Row="1" Value="{x:Bind Progress, Mode=OneWay}" Maximum="100" Margin="0,8,0,6" Height="6" CornerRadius="3" />
+
+                                <Grid Grid.Row="2">
+                                    <TextBlock Text="{x:Bind StatusText, Mode=OneWay}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Text="{x:Bind SizeText, Mode=OneWay}" HorizontalAlignment="Right" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                                </Grid>
                             </Grid>
 
-                            <ProgressBar Grid.Row="1" Value="{x:Bind Progress, Mode=OneWay}" Maximum="100" Margin="0,8,0,6" Height="6" CornerRadius="3" />
-
-                            <Grid Grid.Row="2">
-                                <TextBlock Text="{x:Bind StatusText, Mode=OneWay}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextTrimming="CharacterEllipsis" />
-                                <TextBlock Text="{x:Bind SizeText, Mode=OneWay}" HorizontalAlignment="Right" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-                            </Grid>
+                            <!-- Pause / Resume Action Button -->
+                            <Button Grid.Column="1" 
+                                    Margin="12,0,0,0" 
+                                    VerticalAlignment="Center" 
+                                    Padding="8,8"
+                                    CornerRadius="6"
+                                    Visibility="{x:Bind CanTogglePause, Mode=OneWay}"
+                                    ToolTipService.ToolTip="{x:Bind ActionToolTip, Mode=OneWay}"
+                                    Click="OnTogglePauseDownloadClick">
+                                <FontIcon Glyph="{x:Bind ActionGlyph, Mode=OneWay}" FontSize="14" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                            </Button>
                         </Grid>
                     </Border>
                 </DataTemplate>

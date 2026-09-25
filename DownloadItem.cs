@@ -71,8 +71,22 @@ public class DownloadItem : INotifyPropertyChanged
 
     public DateTime CreatedAt { get; set; } = DateTime.Now;
 
+    private System.Threading.CancellationTokenSource _cts = new();
+
     [System.Text.Json.Serialization.JsonIgnore]
-    public System.Threading.CancellationTokenSource Cts { get; } = new();
+    public System.Threading.CancellationTokenSource Cts => _cts;
+
+    public void Cancel()
+    {
+        try { _cts.Cancel(); } catch { }
+    }
+
+    public System.Threading.CancellationToken ResetCancellationToken()
+    {
+        try { _cts.Dispose(); } catch { }
+        _cts = new System.Threading.CancellationTokenSource();
+        return _cts.Token;
+    }
 
     public double Progress
     {
@@ -83,8 +97,35 @@ public class DownloadItem : INotifyPropertyChanged
     public DownloadStatus Status
     {
         get => _status;
-        set { if (_status != value) { _status = value; OnPropertyChanged(); } }
+        set
+        {
+            if (_status != value)
+            {
+                _status = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(IsActive));
+                OnPropertyChanged(nameof(IsPaused));
+                OnPropertyChanged(nameof(CanTogglePause));
+                OnPropertyChanged(nameof(ActionGlyph));
+                OnPropertyChanged(nameof(ActionToolTip));
+            }
+        }
     }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool IsActive => Status == DownloadStatus.Downloading || Status == DownloadStatus.Queued;
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool IsPaused => Status == DownloadStatus.Paused;
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool CanTogglePause => Status == DownloadStatus.Downloading || Status == DownloadStatus.Queued || Status == DownloadStatus.Paused || Status == DownloadStatus.Failed;
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string ActionGlyph => IsActive ? "\uE769" : "\uE768"; // E769 = Pause, E768 = Play
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string ActionToolTip => IsActive ? "Pause Download" : "Resume Download";
 
     public string SpeedText
     {

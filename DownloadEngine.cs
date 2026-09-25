@@ -380,6 +380,11 @@ public class DownloadEngine
             proc.BeginOutputReadLine();
             proc.BeginErrorReadLine();
 
+            using var reg = cancellationToken.Register(() =>
+            {
+                try { proc.Kill(true); } catch { }
+            });
+
             await proc.WaitForExitAsync(cancellationToken);
 
             string finalFile = await EnsurePlayableMediaFileAsync(downloadsFolder, safeTitle, ext, item.SavePath, cancellationToken);
@@ -403,6 +408,14 @@ public class DownloadEngine
             }
             else
             {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    item.Status = DownloadStatus.Paused;
+                    item.SpeedText = "Paused";
+                    item.StatusText = "Paused by user";
+                    break;
+                }
+
                 // Flaky endpoints (rate limits, Cloudflare walls, empty JSON):
                 // retry the same URL briefly before giving up on it.
                 bool rateLimited = Regex.IsMatch(lastError, @"\b429\b|rate.?limit|too many requests|timed out|timeout|failed to parse json|unable to download.*json|\b50[234]\b|bad gateway|service unavailable|gateway timeout|temporary failure", RegexOptions.IgnoreCase);
@@ -437,8 +450,22 @@ public class DownloadEngine
                 break;
             }
         }
+        catch (OperationCanceledException)
+        {
+            item.Status = DownloadStatus.Paused;
+            item.SpeedText = "Paused";
+            item.StatusText = "Paused by user";
+            break;
+        }
         catch (Exception ex)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                item.Status = DownloadStatus.Paused;
+                item.SpeedText = "Paused";
+                item.StatusText = "Paused by user";
+                break;
+            }
             item.Status = DownloadStatus.Failed;
             item.StatusText = $"Error: {ex.Message}";
             break;
@@ -568,7 +595,8 @@ public class DownloadEngine
         catch (OperationCanceledException)
         {
             item.Status = DownloadStatus.Paused;
-            item.StatusText = "Cancelled";
+            item.SpeedText = "Paused";
+            item.StatusText = "Paused by user";
         }
         catch (Exception ex)
         {

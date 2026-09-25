@@ -4,6 +4,7 @@
   "version": "26.1",
   "description": "Sniffs video streams (m3u8, mpd, mp4, webm) and sends direct stream URLs directly to Wrench Downloader app like IDM.",
   "permissions": [
+    "downloads",
     "webRequest",
     "webRequestExtraHeaders",
     "storage",

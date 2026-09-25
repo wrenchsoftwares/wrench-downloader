@@ -13,12 +13,20 @@
         <StackPanel Spacing="16" VerticalAlignment="Center">
             <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
                 <FontIcon Glyph="&#xE896;" FontSize="24" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
-                <TextBlock Text="Download Captured Video" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                <TextBlock Text="Start Download" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center"/>
             </StackPanel>
 
-            <TextBox x:Name="TitleBox" Header="Title" PlaceholderText="Video Title" />
+            <TextBox x:Name="TitleBox" Header="File Name" PlaceholderText="File Name" />
             <TextBox x:Name="UrlBox" Header="URL" IsReadOnly="True" />
-            <TextBox x:Name="FolderBox" Header="Save Folder" />
+            
+            <Grid ColumnSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBox x:Name="FolderBox" Header="Save Folder" Grid.Column="0" IsReadOnly="True" />
+                <Button Content="Browse…" VerticalAlignment="Bottom" Margin="0,0,0,1" Grid.Column="1" Click="OnBrowseFolderClick" />
+            </Grid>
 
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="12" Margin="0,12,0,0">
                 <Button Content="Cancel" Click="OnCancelClick" />

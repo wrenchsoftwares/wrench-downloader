@@ -4,6 +4,17 @@ const APP_HEALTH_URL = "http://127.0.0.1:45732/api/health";
 document.addEventListener("DOMContentLoaded", async () => {
   const statusEl = document.getElementById("appStatus");
   const listEl = document.getElementById("mediaList");
+  const interceptToggle = document.getElementById("interceptToggle");
+
+  // Load intercept downloads preference
+  if (interceptToggle) {
+    chrome.storage.local.get({ interceptDownloads: true }, (items) => {
+      interceptToggle.checked = items.interceptDownloads !== false;
+    });
+    interceptToggle.addEventListener("change", () => {
+      chrome.storage.local.set({ interceptDownloads: interceptToggle.checked });
+    });
+  }
 
   // Check desktop app connectivity
   try {

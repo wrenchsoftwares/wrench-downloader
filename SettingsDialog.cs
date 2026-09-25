@@ -15,6 +15,7 @@ public sealed class SettingsDialog : ContentDialog
     private readonly TextBox _folderBox;
     private readonly NumberBox _fragmentsBox;
     private readonly ComboBox _qualityBox;
+    private readonly CheckBox _showDialogCheckBox;
 
     private static readonly string[] Qualities =
         ["best", "2160p", "1440p", "1080p", "720p", "480p", "360p"];
@@ -59,6 +60,13 @@ public sealed class SettingsDialog : ContentDialog
         if (_qualityBox.SelectedItem == null)
             _qualityBox.SelectedIndex = 0;
 
+        _showDialogCheckBox = new CheckBox
+        {
+            Content = "Show download confirmation dialog before starting download",
+            IsChecked = SettingsHelper.ShowDownloadDialog,
+            Margin = new Thickness(0, 10, 0, 0)
+        };
+
         var panel = new StackPanel { Spacing = 8, MinWidth = 360 };
         panel.Children.Add(new TextBlock { Text = "Download folder" });
         panel.Children.Add(folderRow);
@@ -66,6 +74,7 @@ public sealed class SettingsDialog : ContentDialog
         panel.Children.Add(_fragmentsBox);
         panel.Children.Add(new TextBlock { Text = "Default quality for pasted URLs", Margin = new Thickness(0, 8, 0, 0) });
         panel.Children.Add(_qualityBox);
+        panel.Children.Add(_showDialogCheckBox);
 
         Content = panel;
         PrimaryButtonClick += OnSaveClick;
@@ -91,6 +100,7 @@ public sealed class SettingsDialog : ContentDialog
     private void OnSaveClick(ContentDialog sender, ContentDialogButtonClickEventArgs args)
     {
         string quality = _qualityBox.SelectedItem as string ?? "best";
-        SettingsHelper.Save(_folderBox.Text, (int)Math.Round(_fragmentsBox.Value), quality);
+        bool showDialog = _showDialogCheckBox.IsChecked ?? true;
+        SettingsHelper.Save(_folderBox.Text, (int)Math.Round(_fragmentsBox.Value), quality, showDialog);
     }
 }

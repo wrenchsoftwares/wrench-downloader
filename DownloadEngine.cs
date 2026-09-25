@@ -451,19 +451,58 @@ public class DownloadEngine
             string totalStr = totalBytes.HasValue ? FormatBytes(totalBytes.Value) : "Unknown size";
             item.SizeText = totalStr;
 
-            string rawExt = Path.GetExtension(new Uri(item.Url).AbsolutePath);
-            if (string.IsNullOrEmpty(rawExt) || rawExt.Length > 5) rawExt = ".mp4";
+            // Determine filename and extension from Content-Disposition, URL, or item.Title
+            string determinedFileName = "";
+            if (response.Content.Headers.ContentDisposition != null)
+            {
+                determinedFileName = response.Content.Headers.ContentDisposition.FileNameStar ?? 
+                                     response.Content.Headers.ContentDisposition.FileName ?? "";
+                determinedFileName = determinedFileName.Trim('"', '\'', ' ');
+            }
+
+            if (string.IsNullOrWhiteSpace(determinedFileName))
+            {
+                try
+                {
+                    determinedFileName = Path.GetFileName(new Uri(item.Url).AbsolutePath);
+                }
+                catch { }
+            }
+
+            string rawExt = "";
+            if (!string.IsNullOrEmpty(determinedFileName) && Path.HasExtension(determinedFileName))
+            {
+                rawExt = Path.GetExtension(determinedFileName);
+            }
+            else if (!string.IsNullOrEmpty(item.Title) && Path.HasExtension(item.Title))
+            {
+                rawExt = Path.GetExtension(item.Title);
+            }
+            else
+            {
+                rawExt = ".bin";
+            }
+
             string safeTitle = SanitizeFileName(item.Title);
             if (string.IsNullOrWhiteSpace(safeTitle) || safeTitle.Equals("index", StringComparison.OrdinalIgnoreCase) || safeTitle.Equals("video", StringComparison.OrdinalIgnoreCase))
             {
-                safeTitle = "Video_Download";
+                safeTitle = !string.IsNullOrWhiteSpace(determinedFileName) 
+                    ? Path.GetFileNameWithoutExtension(determinedFileName) 
+                    : "download";
             }
             if (safeTitle.EndsWith(rawExt, StringComparison.OrdinalIgnoreCase))
             {
                 safeTitle = safeTitle[..^rawExt.Length].TrimEnd();
             }
+
+            // If a specific custom SavePath folder was already chosen in prompt dialog
+            string targetFolder = !string.IsNullOrEmpty(item.SavePath) && Directory.Exists(Path.GetDirectoryName(item.SavePath))
+                ? Path.GetDirectoryName(item.SavePath)!
+                : downloadsFolder;
+
             // Avoid collision: file (1).ext, file (2).ext
-            item.SavePath = GetUniqueFilePath(downloadsFolder, safeTitle, rawExt);
+            item.SavePath = GetUniqueFilePath(targetFolder, safeTitle, rawExt);
+            item.Title = Path.GetFileName(item.SavePath);
 
             using var contentStream = await response.Content.ReadAsStreamAsync(cancellationToken);
             using var fileStream = new FileStream(item.SavePath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, true);

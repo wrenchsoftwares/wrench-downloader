@@ -21,13 +21,43 @@ public sealed partial class DownloadPromptWindow : Window
         TitleBox.Text = item.Title;
         UrlBox.Text = item.Url;
         
-        string downloads = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+        string downloads = SettingsHelper.DownloadFolder;
         FolderBox.Text = downloads;
+    }
+
+    private async void OnBrowseFolderClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var picker = new Windows.Storage.Pickers.FolderPicker();
+            picker.FileTypeFilter.Add("*");
+            picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.Downloads;
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+            var folder = await picker.PickSingleFolderAsync();
+            if (folder != null)
+            {
+                FolderBox.Text = folder.Path;
+            }
+        }
+        catch { }
     }
 
     private void OnStartClick(object sender, RoutedEventArgs e)
     {
-        _item.Title = TitleBox.Text.Trim();
+        string title = TitleBox.Text.Trim();
+        if (!string.IsNullOrEmpty(title))
+        {
+            _item.Title = title;
+        }
+
+        string chosenFolder = FolderBox.Text.Trim();
+        if (!string.IsNullOrEmpty(chosenFolder) && Directory.Exists(chosenFolder))
+        {
+            // If item.SavePath is set or to be determined, configure target folder
+            string filename = !string.IsNullOrEmpty(_item.SavePath) ? Path.GetFileName(_item.SavePath) : $"{_item.Title}";
+            _item.SavePath = Path.Combine(chosenFolder, filename);
+        }
+
         _onConfirmed?.Invoke(_item);
         this.Close();
     }

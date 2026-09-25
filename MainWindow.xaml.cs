@@ -181,13 +181,14 @@ public sealed partial class MainWindow : Window
 
     private void OnExtensionDownloadRequested((DownloadItem item, bool showPrompt) request)
     {
-        var (item, showPrompt) = request;
+        var (item, promptRequestedByCaller) = request;
+        bool shouldPrompt = promptRequestedByCaller || SettingsHelper.ShowDownloadDialog;
 
         // Must dispatch to UI thread
         DispatcherQueue.TryEnqueue(() =>
         {
             item.SetDispatcherQueue(DispatcherQueue);
-            if (showPrompt)
+            if (shouldPrompt)
             {
                 var prompt = new DownloadPromptWindow(item, confirmedItem =>
                 {

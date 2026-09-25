@@ -176,6 +176,61 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   mediaByTab.delete(tabId);
 });
 
+// Intercept general browser downloads (MediaFire, direct downloads, zip, exe, rar, pdf, iso, etc.)
+// and hand them over to Wrench Downloader app.
+const interceptedDownloadIds = new Set();
+
+if (chrome.downloads && chrome.downloads.onCreated) {
+  chrome.downloads.onCreated.addListener(async (downloadItem) => {
+    try {
+      // Check if user has enabled download interception
+      const settings = await chrome.storage.local.get({ interceptDownloads: true });
+      if (settings.interceptDownloads === false) {
+        return;
+      }
+
+      if (!downloadItem || !downloadItem.url) return;
+      const url = downloadItem.url;
+
+      // Do not intercept data URIs or blob URIs created internally by pages
+      if (url.startsWith("data:") || url.startsWith("blob:") || url.startsWith("chrome-extension://")) {
+        return;
+      }
+
+      if (interceptedDownloadIds.has(downloadItem.id)) return;
+      interceptedDownloadIds.add(downloadItem.id);
+
+      // Cancel the browser's native download so Wrench Downloader takes over
+      try {
+        await chrome.downloads.cancel(downloadItem.id);
+        await chrome.downloads.erase({ id: downloadItem.id });
+      } catch (e) {}
+
+      // Retrieve captured headers (Referer, User-Agent)
+      const headers = requestHeadersMap.get(url) || {};
+      let title = downloadItem.filename ? downloadItem.filename.replace(/^.*[\\\/]/, "") : guessTitle(url);
+      if (!title || title === "download") {
+        title = guessTitle(url);
+      }
+
+      const payload = {
+        url: url,
+        title: title,
+        quality: "file",
+        format: title.includes(".") ? title.split(".").pop().toLowerCase() : "",
+        pageUrl: downloadItem.referrer || "",
+        referrer: headers.referer || downloadItem.referrer || "",
+        userAgent: headers.userAgent || navigator.userAgent,
+        prompt: true
+      };
+
+      await sendToDesktopApp(payload);
+    } catch (err) {
+      console.warn("Could not forward browser download to Wrench Downloader:", err);
+    }
+  });
+}
+
 // Message listener from content script or popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const tabId = sender.tab ? sender.tab.id : message.tabId;

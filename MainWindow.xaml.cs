@@ -363,7 +363,7 @@ public sealed partial class MainWindow : Window
 
         aboutPanel.Children.Add(new TextBlock
         {
-            Text = "High-speed multi-threaded media and file downloader with real-time browser companion stream sniffer.",
+            Text = "Ultra-fast media and file download manager. Automatically detects videos and files in your browser and accelerates downloads with multi-connection parallel fragments.",
             TextWrapping = TextWrapping.Wrap,
             FontSize = 13,
             Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"]
@@ -371,9 +371,8 @@ public sealed partial class MainWindow : Window
 
         var detailsStack = new StackPanel { Spacing = 6, Margin = new Thickness(0, 8, 0, 0) };
         detailsStack.Children.Add(new TextBlock { Text = "• Developed by: Wrench Softwares", FontSize = 12 });
-        detailsStack.Children.Add(new TextBlock { Text = "• GitHub: https://github.com/wrenchsoftwares/wrench-downloader", FontSize = 12 });
-        detailsStack.Children.Add(new TextBlock { Text = "• Framework: .NET 9 WinUI 3 (Windows App SDK)", FontSize = 12 });
-        detailsStack.Children.Add(new TextBlock { Text = "• Engine: Multi-part HTTP chunking + yt-dlp integrated", FontSize = 12 });
+        detailsStack.Children.Add(new TextBlock { Text = "• Official Website & Source: https://github.com/wrenchsoftwares/wrench-downloader", FontSize = 12 });
+        detailsStack.Children.Add(new TextBlock { Text = "• Features: Multi-threaded parallel acceleration, browser stream sniffer, auto-resume & video format conversion", FontSize = 12, TextWrapping = TextWrapping.Wrap });
         aboutPanel.Children.Add(detailsStack);
 
         var dialog = new ContentDialog

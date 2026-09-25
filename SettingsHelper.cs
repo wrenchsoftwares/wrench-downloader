@@ -14,6 +14,11 @@ public static class SettingsHelper
     private const string QualityKey = "DefaultQuality";
     private const string ShowDialogKey = "ShowDownloadDialog";
 
+    private static string? _cachedFolder;
+    private static int? _cachedFragments;
+    private static string? _cachedQuality;
+    private static bool? _cachedShowDialog;
+
     public static string DefaultDownloadsFolder =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
 
@@ -21,13 +26,19 @@ public static class SettingsHelper
     {
         get
         {
+            if (_cachedFolder != null) return _cachedFolder;
             try
             {
                 var v = ApplicationData.Current.LocalSettings.Values[FolderKey] as string;
-                if (!string.IsNullOrWhiteSpace(v) && Directory.Exists(v)) return v;
+                if (!string.IsNullOrWhiteSpace(v) && Directory.Exists(v))
+                {
+                    _cachedFolder = v;
+                    return v;
+                }
             }
             catch { }
-            return DefaultDownloadsFolder;
+            _cachedFolder = DefaultDownloadsFolder;
+            return _cachedFolder;
         }
     }
 
@@ -35,12 +46,18 @@ public static class SettingsHelper
     {
         get
         {
+            if (_cachedFragments.HasValue) return _cachedFragments.Value;
             try
             {
                 var v = ApplicationData.Current.LocalSettings.Values[FragmentsKey];
-                if (v is int i) return Math.Clamp(i, 1, 32);
+                if (v is int i)
+                {
+                    _cachedFragments = Math.Clamp(i, 1, 32);
+                    return _cachedFragments.Value;
+                }
             }
             catch { }
+            _cachedFragments = 8;
             return 8;
         }
     }
@@ -49,12 +66,18 @@ public static class SettingsHelper
     {
         get
         {
+            if (_cachedQuality != null) return _cachedQuality;
             try
             {
                 var v = ApplicationData.Current.LocalSettings.Values[QualityKey] as string;
-                if (!string.IsNullOrWhiteSpace(v)) return v;
+                if (!string.IsNullOrWhiteSpace(v))
+                {
+                    _cachedQuality = v;
+                    return v;
+                }
             }
             catch { }
+            _cachedQuality = "best";
             return "best";
         }
     }
@@ -63,24 +86,39 @@ public static class SettingsHelper
     {
         get
         {
+            if (_cachedShowDialog.HasValue) return _cachedShowDialog.Value;
             try
             {
                 var v = ApplicationData.Current.LocalSettings.Values[ShowDialogKey];
-                if (v is bool b) return b;
+                if (v is bool b)
+                {
+                    _cachedShowDialog = b;
+                    return b;
+                }
             }
             catch { }
-            return true; // Default to showing prompt dialog like IDM
+            _cachedShowDialog = true;
+            return true;
         }
     }
 
     public static void Save(string folder, int fragments, string quality, bool showDialog)
     {
-        var values = ApplicationData.Current.LocalSettings.Values;
-        if (!string.IsNullOrWhiteSpace(folder) && Directory.Exists(folder))
-            values[FolderKey] = folder;
-        values[FragmentsKey] = Math.Clamp(fragments, 1, 16);
-        if (!string.IsNullOrWhiteSpace(quality))
-            values[QualityKey] = quality;
-        values[ShowDialogKey] = showDialog;
+        _cachedFolder = (!string.IsNullOrWhiteSpace(folder) && Directory.Exists(folder)) ? folder : DefaultDownloadsFolder;
+        _cachedFragments = Math.Clamp(fragments, 1, 32);
+        _cachedQuality = !string.IsNullOrWhiteSpace(quality) ? quality : "best";
+        _cachedShowDialog = showDialog;
+
+        try
+        {
+            var values = ApplicationData.Current.LocalSettings.Values;
+            if (!string.IsNullOrWhiteSpace(folder) && Directory.Exists(folder))
+                values[FolderKey] = folder;
+            values[FragmentsKey] = _cachedFragments.Value;
+            if (!string.IsNullOrWhiteSpace(quality))
+                values[QualityKey] = quality;
+            values[ShowDialogKey] = showDialog;
+        }
+        catch { }
     }
 }

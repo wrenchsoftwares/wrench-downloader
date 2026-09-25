@@ -9,6 +9,18 @@ public sealed partial class DownloadPromptWindow : Window
     private readonly DownloadItem _item;
     private readonly Action<DownloadItem> _onConfirmed;
 
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool BringWindowToTop(IntPtr hWnd);
+
+    private const int SW_RESTORE = 9;
+    private const int SW_SHOW = 5;
+
     public DownloadPromptWindow(DownloadItem item, Action<DownloadItem> onConfirmed)
     {
         _item = item;
@@ -18,11 +30,38 @@ public sealed partial class DownloadPromptWindow : Window
         Title = $"Download - {item.Title}";
         AppWindow.Resize(new Windows.Graphics.SizeInt32(660, 440));
 
+        // Center dialog window on the active display
+        try
+        {
+            var displayArea = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(AppWindow.Id, Microsoft.UI.Windowing.DisplayAreaFallback.Primary);
+            if (displayArea != null)
+            {
+                var workArea = displayArea.WorkArea;
+                int x = workArea.X + (workArea.Width - 660) / 2;
+                int y = workArea.Y + (workArea.Height - 440) / 2;
+                AppWindow.Move(new Windows.Graphics.PointInt32(x, y));
+            }
+        }
+        catch { }
+
         TitleBox.Text = item.Title;
         UrlBox.Text = item.Url;
         
         string downloads = SettingsHelper.DownloadFolder;
         FolderBox.Text = downloads;
+    }
+
+    public void ShowAndFocus()
+    {
+        Activate();
+        try
+        {
+            var hWnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+            ShowWindow(hWnd, SW_RESTORE);
+            BringWindowToTop(hWnd);
+            SetForegroundWindow(hWnd);
+        }
+        catch { }
     }
 
     private async void OnBrowseFolderClick(object sender, RoutedEventArgs e)

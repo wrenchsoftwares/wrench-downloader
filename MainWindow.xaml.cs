@@ -199,7 +199,7 @@ public sealed partial class MainWindow : Window
                         SaveHistory();
                     });
                 });
-                prompt.Activate();
+                prompt.ShowAndFocus();
             }
             else
             {

@@ -16,7 +16,7 @@ public sealed partial class DownloadPromptWindow : Window
         InitializeComponent();
 
         Title = $"Download - {item.Title}";
-        AppWindow.Resize(new Windows.Graphics.SizeInt32(560, 360));
+        AppWindow.Resize(new Windows.Graphics.SizeInt32(660, 440));
 
         TitleBox.Text = item.Title;
         UrlBox.Text = item.Url;

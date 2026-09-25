@@ -59,8 +59,27 @@ public partial class App : Application
             _window = new MainWindow();
             MainWindowInstance = _window;
             System.IO.File.AppendAllText(logPath, $"[{System.DateTime.Now}] MainWindow instantiated\n");
-            _window.Activate();
-            System.IO.File.AppendAllText(logPath, $"[{System.DateTime.Now}] MainWindow.Activate called\n");
+
+            bool startBackground = false;
+            foreach (var arg in System.Environment.GetCommandLineArgs())
+            {
+                if (string.Equals(arg, "--background", System.StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(arg, "/background", System.StringComparison.OrdinalIgnoreCase))
+                {
+                    startBackground = true;
+                    break;
+                }
+            }
+
+            if (!startBackground)
+            {
+                _window.Activate();
+                System.IO.File.AppendAllText(logPath, $"[{System.DateTime.Now}] MainWindow.Activate called\n");
+            }
+            else
+            {
+                System.IO.File.AppendAllText(logPath, $"[{System.DateTime.Now}] Started in background tray mode\n");
+            }
         }
         catch (System.Exception ex)
         {

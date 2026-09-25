@@ -15,6 +15,8 @@ public sealed partial class MainWindow : Window
 {
     public ObservableCollection<DownloadItem> Downloads { get; } = new();
     private ExtensionBridgeServer? _bridgeServer;
+    private TrayIconHelper? _trayIcon;
+    private bool _isExplicitExit;
     private static readonly string HistoryFilePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "WrenchDownloader",
@@ -24,7 +26,6 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
         Title = "Wrench Downloader v26.1";
-        //AppWindow.Resize(new Windows.Graphics.SizeInt32(920, 620));
         // Start Maximized:
         if (AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter presenter)
         {
@@ -42,11 +43,77 @@ public sealed partial class MainWindow : Window
         UpdateCounts();
 
         // Flush history immediately on window closing/closed
-        Closed += (s, e) => SaveHistoryToFile();
+        Closed += (s, e) =>
+        {
+            _trayIcon?.Dispose();
+            SaveHistoryToFile();
+        };
+
+        // Initialize System Tray
+        InitTrayIcon();
+
+        // Handle Close button / Alt+F4
+        AppWindow.Closing += (sender, args) =>
+        {
+            if (!_isExplicitExit && SettingsHelper.CloseToTray)
+            {
+                args.Cancel = true;
+                AppWindow.Hide();
+            }
+            else
+            {
+                _trayIcon?.Dispose();
+            }
+        };
 
         // Start Extension Bridge Server
         _bridgeServer = new ExtensionBridgeServer(OnExtensionDownloadRequested);
         _bridgeServer.Start();
+    }
+
+    private void InitTrayIcon()
+    {
+        try
+        {
+            IntPtr hWnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+            _trayIcon = new TrayIconHelper(hWnd);
+            _trayIcon.OnOpenRequested += () => DispatcherQueue.TryEnqueue(RestoreAndShow);
+            _trayIcon.OnSettingsRequested += () => DispatcherQueue.TryEnqueue(() =>
+            {
+                RestoreAndShow();
+                OnSettingsClick(this, new RoutedEventArgs());
+            });
+            _trayIcon.OnExitRequested += () => DispatcherQueue.TryEnqueue(ExitApplication);
+            _trayIcon.Initialize("Wrench Downloader");
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Failed to init tray icon: {ex.Message}");
+        }
+    }
+
+    public void RestoreAndShow()
+    {
+        AppWindow.Show();
+        if (AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter presenter)
+        {
+            if (presenter.State == Microsoft.UI.Windowing.OverlappedPresenterState.Minimized)
+            {
+                presenter.Restore();
+            }
+        }
+        Activate();
+    }
+
+    public void ExitApplication()
+    {
+        _isExplicitExit = true;
+        _trayIcon?.Dispose();
+        _trayIcon = null;
+        SaveHistoryToFile();
+        try { _bridgeServer?.Stop(); } catch { }
+        AppWindow.Destroy();
+        Application.Current.Exit();
     }
 
     private void LoadHistory()

@@ -89,18 +89,20 @@ document.addEventListener("DOMContentLoaded", async () => {
       response.media.forEach((item) => {
         const div = document.createElement("div");
         div.className = "item";
-        const cleanTitle = (activeTab.title || item.title || "Video").replace(/[\/\\:*?"<>|]/g, "").trim();
-        let format = item.type === "hls" ? "mp4" : (item.format || "mp4");
-        const mExt = item.url.split("?")[0].match(/\.(mp4|webm|mkv|flv|ts|mp3)($|\?)/i);
-        if (mExt) format = mExt[1].toLowerCase();
+        const cleanTitle = (item.title || activeTab.title || "Download").replace(/[\/\\:*?"<>|]/g, "").trim();
+        let format = item.format || "";
+        const mExt = item.url.split("?")[0].match(/\.([a-z0-9]+)($|\?)/i);
+        if (mExt && !format) format = mExt[1].toLowerCase();
+        if (item.type === "hls" || item.type === "dash") format = "mp4";
 
-        const qLabel = item.quality || (format === "mp3" ? "Audio" : (item.size ? item.size : "Video"));
-        const resStr = format === "mp3" ? "(Audio Only)" : (item.size ? `(Size: ${item.size})` : "");
-        const filename = `${cleanTitle} - ${qLabel}.${format}`;
+        const isStream = item.type === "hls" || item.type === "dash" || item.type === "video" || item.type === "audio";
+        const qLabel = item.quality || (isStream ? (format === "mp3" ? "Audio" : (item.size ? item.size : "Media")) : "File");
+        const resStr = item.size ? `(Size: ${item.size})` : "";
+        const filename = format && !cleanTitle.toLowerCase().endsWith("." + format) ? `${cleanTitle}.${format}` : cleanTitle;
 
         div.innerHTML = `
           <div class="item-title">${escapeHtml(filename)}</div>
-          <div class="item-url">Format: ${format.toUpperCase()}${resStr ? ` | Res: ${resStr}` : ""}</div>
+          <div class="item-url">${format ? `Type: ${format.toUpperCase()}` : ""}${resStr ? ` | ${resStr}` : ""}</div>
         `;
 
         div.addEventListener("click", () => {
@@ -108,7 +110,7 @@ document.addEventListener("DOMContentLoaded", async () => {
             action: "SEND_TO_APP",
             payload: {
               url: item.url,
-              title: `${cleanTitle} - ${qLabel}`,
+              title: filename,
               quality: qLabel,
               format: format,
               pageUrl: activeTab.url,
@@ -144,41 +146,17 @@ function escapeHtml(str) {
   );
 }
 
-// Last-resort rows when the page has no content script (no fake resolutions).
+// Last-resort when no media or downloadable stream was detected on the page
 function renderPageFallback() {
   const listEl = document.getElementById("mediaList");
   chrome.tabs.query({ active: true, currentWindow: true }, ([activeTab]) => {
     if (!activeTab) return;
-    const rawTitle = (activeTab.title || "Video").replace(/[\/\\:*?"<>|]/g, "").trim() || "Video";
-    listEl.innerHTML = "";
-    const mk = (suffix, sub, quality, format) => {
-      const div = document.createElement("div");
-      div.className = "item";
-      div.innerHTML = `
-        <div class="item-title">${escapeHtml(rawTitle + suffix)}</div>
-        <div class="item-url">${escapeHtml(sub)}</div>
-      `;
-      div.addEventListener("click", () => {
-        chrome.runtime.sendMessage({
-          action: "SEND_TO_APP",
-          payload: {
-            url: activeTab.url,
-            title: `${rawTitle} - ${quality === "audio" ? "Audio" : "Video"}`,
-            quality: quality,
-            format: format,
-            pageUrl: activeTab.url,
-            referrer: activeTab.url,
-            userAgent: navigator.userAgent,
-            prompt: false
-          }
-        }, (res) => {
-          if (res && res.success) window.close();
-          else alert("Could not reach Wrench Downloader desktop app.");
-        });
-      });
-      listEl.appendChild(div);
-    };
-    mk(".mp4", "Format: MP4", "best", "mp4");
-    mk(" - Audio.mp3", "Format: MP3 | Res: (Audio Only)", "audio", "mp3");
+    listEl.innerHTML = `
+      <div class="empty">
+        <div>No active downloads or media streams on this tab.</div>
+        <div style="margin-top: 6px; font-size: 11px; color: #6ee7b7;">Browser downloads (ZIP, EXE, ISO, etc.) are automatically captured when you click download links!</div>
+      </div>
+    `;
   });
 }
+

@@ -142,7 +142,7 @@
 
         <!-- Status Footer -->
         <Border Grid.Row="3" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="0,1,0,0" Padding="16,8">
-            <TextBlock x:Name="StatusTextBlock" Text="Ready. Sniffed browser videos will prompt download directly." FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+            <TextBlock x:Name="StatusTextBlock" Text="Ready. Files and streams captured from your browser will prompt download directly." FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
         </Border>
     </Grid>
 </Window>

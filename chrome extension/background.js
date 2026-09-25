@@ -128,13 +128,29 @@ chrome.webRequest.onBeforeRequest.addListener(
 
 function guessTitle(url) {
   try {
-    const cleanUrl = url.split("?")[0].split("#")[0];
-    const parts = cleanUrl.split("/");
-    let last = parts[parts.length - 1] || "video";
-    return decodeURIComponent(last);
-  } catch (e) {
-    return "Video Stream";
-  }
+    const urlObj = new URL(url);
+    // 1. Check common query parameter names used by file download mirrors (e.g. slug=win64.exe.zip, file=..., filename=...)
+    for (const param of ["slug", "file", "filename", "name", "title"]) {
+      const val = urlObj.searchParams.get(param);
+      if (val && val.includes(".")) {
+        return decodeURIComponent(val.replace(/^.*[\\\/]/, ""));
+      }
+    }
+
+    // 2. Extract from URL path
+    const pathname = urlObj.pathname;
+    const parts = pathname.split("/").filter(Boolean);
+    const last = parts.length > 0 ? parts[parts.length - 1] : "";
+    if (last && last.includes(".")) {
+      return decodeURIComponent(last);
+    }
+
+    if (last && last.toLowerCase() !== "download" && last.toLowerCase() !== "video") {
+      return decodeURIComponent(last);
+    }
+  } catch (e) {}
+
+  return "Download";
 }
 
 function formatBytes(bytes) {

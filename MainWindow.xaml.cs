@@ -15,8 +15,10 @@ public sealed partial class MainWindow : Window
 {
     public ObservableCollection<DownloadItem> Downloads { get; } = new();
     private ExtensionBridgeServer? _bridgeServer;
+#if !DEBUG
     private TrayIconHelper? _trayIcon;
     private bool _isExplicitExit;
+#endif
     private static readonly string HistoryFilePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "WrenchDownloader",
@@ -45,11 +47,14 @@ public sealed partial class MainWindow : Window
         // Flush history immediately on window closing/closed
         Closed += (s, e) =>
         {
+#if !DEBUG
             _trayIcon?.Dispose();
+#endif
             SaveHistoryToFile();
         };
 
-        // Initialize System Tray
+#if !DEBUG
+        // Initialize System Tray (Release mode only)
         InitTrayIcon();
 
         // Handle Close button / Alt+F4
@@ -65,12 +70,14 @@ public sealed partial class MainWindow : Window
                 _trayIcon?.Dispose();
             }
         };
+#endif
 
         // Start Extension Bridge Server
         _bridgeServer = new ExtensionBridgeServer(OnExtensionDownloadRequested);
         _bridgeServer.Start();
     }
 
+#if !DEBUG
     private void InitTrayIcon()
     {
         try
@@ -115,6 +122,7 @@ public sealed partial class MainWindow : Window
         AppWindow.Destroy();
         Application.Current.Exit();
     }
+#endif
 
     private void LoadHistory()
     {

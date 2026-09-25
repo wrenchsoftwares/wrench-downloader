@@ -16,8 +16,10 @@ public sealed class SettingsDialog : ContentDialog
     private readonly NumberBox _fragmentsBox;
     private readonly ComboBox _qualityBox;
     private readonly CheckBox _showDialogCheckBox;
+#if !DEBUG
     private readonly CheckBox _closeToTrayCheckBox;
     private readonly CheckBox _startWithWindowsCheckBox;
+#endif
 
     private static readonly string[] Qualities =
         ["best", "2160p", "1440p", "1080p", "720p", "480p", "360p"];
@@ -69,6 +71,7 @@ public sealed class SettingsDialog : ContentDialog
             Margin = new Thickness(0, 10, 0, 0)
         };
 
+#if !DEBUG
         _closeToTrayCheckBox = new CheckBox
         {
             Content = "Minimize to System Tray when closing the window",
@@ -82,6 +85,7 @@ public sealed class SettingsDialog : ContentDialog
             IsChecked = SettingsHelper.StartWithWindows,
             Margin = new Thickness(0, 4, 0, 0)
         };
+#endif
 
         var panel = new StackPanel { Spacing = 8, MinWidth = 380 };
         panel.Children.Add(new TextBlock { Text = "Download folder" });
@@ -91,8 +95,10 @@ public sealed class SettingsDialog : ContentDialog
         panel.Children.Add(new TextBlock { Text = "Default quality for pasted URLs", Margin = new Thickness(0, 8, 0, 0) });
         panel.Children.Add(_qualityBox);
         panel.Children.Add(_showDialogCheckBox);
+#if !DEBUG
         panel.Children.Add(_closeToTrayCheckBox);
         panel.Children.Add(_startWithWindowsCheckBox);
+#endif
 
         Content = panel;
         PrimaryButtonClick += OnSaveClick;
@@ -119,8 +125,12 @@ public sealed class SettingsDialog : ContentDialog
     {
         string quality = _qualityBox.SelectedItem as string ?? "best";
         bool showDialog = _showDialogCheckBox.IsChecked ?? true;
+#if !DEBUG
         bool closeToTray = _closeToTrayCheckBox.IsChecked ?? true;
         bool startWithWindows = _startWithWindowsCheckBox.IsChecked ?? false;
         SettingsHelper.Save(_folderBox.Text, (int)Math.Round(_fragmentsBox.Value), quality, showDialog, closeToTray, startWithWindows);
+#else
+        SettingsHelper.Save(_folderBox.Text, (int)Math.Round(_fragmentsBox.Value), quality, showDialog);
+#endif
     }
 }

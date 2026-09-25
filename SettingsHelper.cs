@@ -111,6 +111,9 @@ public static class SettingsHelper
     {
         get
         {
+#if DEBUG
+            return false;
+#else
             if (_cachedCloseToTray.HasValue) return _cachedCloseToTray.Value;
             try
             {
@@ -124,6 +127,7 @@ public static class SettingsHelper
             catch { }
             _cachedCloseToTray = true; // Default to minimize to tray on close
             return true;
+#endif
         }
     }
 
@@ -131,6 +135,9 @@ public static class SettingsHelper
     {
         get
         {
+#if DEBUG
+            return false;
+#else
             if (_cachedStartWithWindows.HasValue) return _cachedStartWithWindows.Value;
             try
             {
@@ -143,12 +150,14 @@ public static class SettingsHelper
                 _cachedStartWithWindows = false;
                 return false;
             }
+#endif
         }
     }
 
     public static void SetStartWithWindows(bool enable)
     {
         _cachedStartWithWindows = enable;
+#if !DEBUG
         try
         {
             using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(RunRegistryKey, true);
@@ -168,6 +177,7 @@ public static class SettingsHelper
             }
         }
         catch { }
+#endif
     }
 
     public static void Save(string folder, int fragments, string quality, bool showDialog, bool closeToTray, bool startWithWindows)

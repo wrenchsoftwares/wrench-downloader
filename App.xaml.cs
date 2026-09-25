@@ -61,6 +61,7 @@ public partial class App : Application
             System.IO.File.AppendAllText(logPath, $"[{System.DateTime.Now}] MainWindow instantiated\n");
 
             bool startBackground = false;
+#if !DEBUG
             foreach (var arg in System.Environment.GetCommandLineArgs())
             {
                 if (string.Equals(arg, "--background", System.StringComparison.OrdinalIgnoreCase) ||
@@ -70,6 +71,7 @@ public partial class App : Application
                     break;
                 }
             }
+#endif
 
             if (!startBackground)
             {

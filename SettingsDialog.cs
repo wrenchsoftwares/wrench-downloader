@@ -45,7 +45,7 @@ public sealed class SettingsDialog : ContentDialog
         _fragmentsBox = new NumberBox
         {
             Minimum = 1,
-            Maximum = 16,
+            Maximum = 32,
             Value = SettingsHelper.ConcurrentFragments,
             SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact,
             SmallChange = 1,

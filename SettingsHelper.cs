@@ -38,10 +38,10 @@ public static class SettingsHelper
             try
             {
                 var v = ApplicationData.Current.LocalSettings.Values[FragmentsKey];
-                if (v is int i) return Math.Clamp(i, 1, 16);
+                if (v is int i) return Math.Clamp(i, 1, 32);
             }
             catch { }
-            return 4;
+            return 8;
         }
     }
 

@@ -184,6 +184,8 @@ public class DownloadEngine
         // IDM-style parallel segment download flags with robust retry & timeout settings to ensure it completes
         argsBuilder.Append("--no-playlist --no-warnings --socket-timeout 20 --retries 10 --fragment-retries 20 ");
         argsBuilder.Append($"--concurrent-fragments {SettingsHelper.ConcurrentFragments} ");
+        // Maximize network buffer & chunking to avoid server-side rate-limiting and maximize throughput
+        argsBuilder.Append("--buffer-size 64K --http-chunk-size 10M --throttled-rate 100K ");
 
         // Some pages obfuscate high-quality stream URLs with JavaScript.
         // Without a JS runtime yt-dlp fails with "PhantomJS not found". Use node/deno when available.
@@ -527,10 +529,12 @@ public class DownloadEngine
             item.SavePath = GetUniqueFilePath(targetFolder, safeTitle, rawExt);
             item.Title = Path.GetFileName(item.SavePath);
 
+            // High-speed 512KB buffer for maximum I/O throughput
+            const int bufferSize = 524288;
             using var contentStream = await response.Content.ReadAsStreamAsync(cancellationToken);
-            using var fileStream = new FileStream(item.SavePath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, true);
+            using var fileStream = new FileStream(item.SavePath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize, true);
 
-            byte[] buffer = new byte[81920];
+            byte[] buffer = new byte[bufferSize];
             long totalRead = 0;
             int bytesRead;
             var sw = Stopwatch.StartNew();

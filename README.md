@@ -28,8 +28,8 @@ git clone https://github.com/wrenchsoftwares/wrench-downloader.git
 cd wrench-downloader
 
 # Build and run
-dotnet build WrenchDownloader/WrenchDownloader.csproj -c Release
-dotnet run --project WrenchDownloader/WrenchDownloader.csproj
+dotnet build WrenchDownloader.csproj -c Release
+dotnet run --project WrenchDownloader.csproj
 ```
 
 ### 3. Install Chrome Companion Extension
@@ -45,17 +45,20 @@ dotnet run --project WrenchDownloader/WrenchDownloader.csproj
 
 ```
 wrench-downloader/
-├── WrenchDownloader/             # WinUI 3 desktop application (.NET 9)
-│   ├── DownloadEngine.cs         # Multi-threaded download & assembly engine
-│   ├── ExtensionBridgeServer.cs  # Local HTTP bridge server for Chrome extension
-│   ├── MainWindow.xaml           # Main dashboard & download queue
-│   ├── SettingsDialog.cs         # App settings & configuration
-│   └── Package.appxmanifest      # App package manifest (v26.1)
+├── WrenchDownloader.csproj       # WinUI 3 desktop application (.NET 9)
+├── DownloadEngine.cs             # Multi-threaded download & assembly engine
+├── ExtensionBridgeServer.cs      # Local HTTP bridge server for Chrome extension
+├── MainWindow.xaml               # Main dashboard & download queue
+├── SettingsDialog.cs             # App settings & configuration
+├── Package.appxmanifest          # App package manifest (v26.1)
 ├── chrome extension/             # Chrome Manifest V3 Companion extension
 │   ├── injected.js               # In-page fetch / XHR stream interceptor
 │   ├── content.js                # Video detector & floating download overlay
 │   ├── background.js             # Network request sniffer & desktop bridge
 │   └── manifest.json             # Extension manifest (v26.1)
+├── tests/                        # Playwright verification and integration scripts
+├── push.bat                      # Windows one-click script to stage, commit & push to main
+├── push.ps1                      # PowerShell script to push to main
 └── WrenchDownloader.sln          # Solution file
 ```
 

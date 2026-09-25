@@ -1,4 +1,4 @@
-# 🔧 Wrench Downloader v26.1
+# 🔧 Wrench Downloader v26.1.1
 
 > High-speed multi-threaded media and file downloader with integrated Chrome Companion stream sniffer. An ultra-fast, modern alternative to IDM built with .NET 9 and Windows App SDK (WinUI 3).
 
@@ -32,7 +32,12 @@ dotnet build WrenchDownloader.csproj -c Release
 dotnet run --project WrenchDownloader.csproj
 ```
 
-### 3. Install Chrome Companion Extension
+### 3. Create a Release Package
+Run `./release.ps1` from PowerShell. It publishes an untrimmed, self-contained Windows x64 build and creates a versioned ZIP at `artifacts/releases/26.1.1/WrenchDownloader-26.1.1-win-x64.zip`.
+
+The extracted package keeps the app executable beside its Windows App SDK runtime files and language resources. The Chrome Companion stays in its own `chrome extension` folder within the package.
+
+### 4. Install Chrome Companion Extension
 1. Open Google Chrome (or Edge/Brave/Chromium).
 2. Navigate to `chrome://extensions/`.
 3. Enable **Developer mode** in the top right corner.
@@ -50,15 +55,17 @@ wrench-downloader/
 ├── ExtensionBridgeServer.cs      # Local HTTP bridge server for Chrome extension
 ├── MainWindow.xaml               # Main dashboard & download queue
 ├── SettingsDialog.cs             # App settings & configuration
-├── Package.appxmanifest          # App package manifest (v26.1)
+├── Package.appxmanifest          # App package manifest (v26.1.1)
 ├── chrome extension/             # Chrome Manifest V3 Companion extension
 │   ├── injected.js               # In-page fetch / XHR stream interceptor
 │   ├── content.js                # Video detector & floating download overlay
 │   ├── background.js             # Network request sniffer & desktop bridge
-│   └── manifest.json             # Extension manifest (v26.1)
+│   └── manifest.json             # Extension manifest (v26.1.1)
 ├── tests/                        # Playwright verification and integration scripts
 ├── push.bat                      # Windows one-click script to stage, commit & push to main
 ├── push.ps1                      # PowerShell script to push to main
+├── release.ps1                   # Builds and packages an organized release
+├── artifacts/releases/           # Generated, versioned release packages (git-ignored)
 └── WrenchDownloader.sln          # Solution file
 ```
 

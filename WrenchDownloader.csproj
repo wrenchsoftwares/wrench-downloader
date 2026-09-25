@@ -16,10 +16,10 @@
     <EnableMsixTooling>false</EnableMsixTooling>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>26.1</Version>
-    <AssemblyVersion>26.1.0.0</AssemblyVersion>
-    <FileVersion>26.1.0.0</FileVersion>
-    <InformationalVersion>26.1</InformationalVersion>
+    <Version>26.1.1</Version>
+    <AssemblyVersion>26.1.1.0</AssemblyVersion>
+    <FileVersion>26.1.1.0</FileVersion>
+    <InformationalVersion>26.1.1</InformationalVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -74,7 +74,6 @@
   <PropertyGroup>
     <PublishReadyToRun Condition="'$(Configuration)' == 'Debug'">False</PublishReadyToRun>
     <PublishReadyToRun Condition="'$(Configuration)' != 'Debug'">True</PublishReadyToRun>
-    <PublishTrimmed Condition="'$(Configuration)' == 'Debug'">False</PublishTrimmed>
-    <PublishTrimmed Condition="'$(Configuration)' != 'Debug'">True</PublishTrimmed>
+    <PublishTrimmed>false</PublishTrimmed>
   </PropertyGroup>
 </Project>

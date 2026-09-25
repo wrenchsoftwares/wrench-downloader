@@ -1,0 +1,149 @@
+/* Wrench Downloader Video Overlay Styling - small icon box outside video */
+.wrench-video-overlay-btn {
+  position: absolute;
+  z-index: 2147483647;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  background: rgba(18, 20, 24, 0.92);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  padding: 0;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(8px);
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.wrench-video-overlay-btn:hover {
+  background: #0078d4;
+  border-color: #0078d4;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(0, 120, 212, 0.5);
+}
+
+.wrench-icon {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
+.wrench-dropdown-menu {
+  position: absolute;
+  z-index: 2147483647;
+  background: #18191c;
+  border: 1px solid #333842;
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7);
+  min-width: 380px;
+  max-width: 560px;
+  max-height: 420px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 6px 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+  color: #eeeeee;
+  backdrop-filter: blur(16px);
+}
+
+/* Custom scrollbar for dropdown menu */
+.wrench-dropdown-menu::-webkit-scrollbar {
+  width: 6px;
+}
+
+.wrench-dropdown-menu::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 0 8px 8px 0;
+}
+
+.wrench-dropdown-menu::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: 3px;
+}
+
+.wrench-dropdown-menu::-webkit-scrollbar-thumb:hover {
+  background: #0078d4;
+}
+
+.wrench-dropdown-header {
+  padding: 8px 14px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #8f9298;
+  border-bottom: 1px solid #282a30;
+}
+
+.wrench-dropdown-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.wrench-dropdown-item:hover {
+  background: #0078d4;
+  color: #ffffff;
+}
+
+.wrench-item-info {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex: 1;
+}
+
+.wrench-item-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+  font-size: 13px;
+  color: #ffffff;
+}
+
+.wrench-item-sub {
+  font-size: 11px;
+  color: #a0aec0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 3px;
+}
+
+.wrench-dropdown-item:hover .wrench-item-sub {
+  color: #e0f2fe;
+}
+
+.wrench-item-badge {
+  font-size: 10px;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.12);
+  color: #cbd5e1;
+  padding: 3px 7px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  letter-spacing: 0.5px;
+}
+
+.wrench-dropdown-item:hover .wrench-item-badge {
+  background: rgba(255, 255, 255, 0.25);
+  color: #ffffff;
+}
+
+.wrench-dropdown-empty {
+  padding: 12px;
+  text-align: center;
+  color: #888888;
+  font-size: 12px;
+}

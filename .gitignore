@@ -1,0 +1,63 @@
+# Prerequisites
+.vs/
+.vscode/
+bin/
+obj/
+Debug/
+Release/
+x64/
+x86/
+ARM64/
+artifacts/
+
+# Build results
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+Generated\ Files/
+*_wpftmp.csproj
+
+# User-specific files
+*.rsuser
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Mono / Visual Studio Code
+.history/
+.ionide/
+
+# Logs and databases
+*.log
+*.binlog
+*.tlog
+
+# Test & Packaging
+[Tt]est[Rr]esult*/
+AppPackages/
+BundleArtifacts/
+*.msix
+*.msixupload
+*.appx
+*.appxbundle
+*.appxupload
+publish/
+PublishScripts/
+
+# Python test scripts & temp caches
+__pycache__/
+*.py
+*.pyc
+*.part
+*.part-*
+*.ytdl
+*.mp4
+*.m4a
+*.webm
+*.ts
+*.mkv
+downloaded_*
+history.json
+startup.log

@@ -1,0 +1,148 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Window
+    x:Class="WrenchDownloader.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:local="using:WrenchDownloader"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    Title="Wrench Downloader"
+    mc:Ignorable="d">
+
+    <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- Header / Toolbar -->
+        <Border Grid.Row="0" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="0,0,0,1" Padding="16,12">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                    <TextBlock Text="🔧" FontSize="22" VerticalAlignment="Center" />
+                    <TextBlock Text="Wrench Downloader" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    <Border Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="4" Padding="6,2" VerticalAlignment="Center">
+                        <TextBlock Text="v26.1" FontSize="11" FontWeight="SemiBold" Foreground="White" />
+                    </Border>
+                </StackPanel>
+
+                <!-- URL Bar -->
+                <Grid Grid.Column="1" Margin="24,0,16,0">
+                    <TextBox x:Name="UrlTextBox" PlaceholderText="Paste download or video URL..." VerticalAlignment="Center" />
+                </Grid>
+
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8">
+                    <Button Content="Add Download" Style="{ThemeResource AccentButtonStyle}" Click="OnAddDownloadClick" />
+                    <Button Content="Open Folder" Click="OnOpenFolderClick" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- Subheader, Stats & Bulk Actions -->
+        <Border Grid.Row="1" Background="{ThemeResource LayerFillColorDefaultBrush}" Padding="16,8">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <TextBlock x:Name="DownloadCountTextBlock" Text="0 Downloads" FontSize="13" FontWeight="Medium" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <Button x:Name="RemoveSelectedButton" Content="Remove Selected" Click="OnRemoveSelectedClick" IsEnabled="False" />
+                    <Button Content="Remove Completed" Click="OnRemoveCompletedClick" ToolTipService.ToolTip="Remove all finished downloads from the list" />
+                    <Button Content="Remove All" Click="OnRemoveAllClick" ToolTipService.ToolTip="Clear the entire list (cancels active downloads)" />
+                </StackPanel>
+
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <TextBlock Text="Chrome Companion:" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" VerticalAlignment="Center" />
+                    <TextBlock Text="● Listening (127.0.0.1:45732)" FontSize="12" FontWeight="SemiBold" Foreground="#107C41" VerticalAlignment="Center" />
+                    <Button Click="OnSettingsClick" ToolTipService.ToolTip="Settings" Margin="8,0,0,0">
+                        <FontIcon Glyph="&#xE713;" FontSize="14" />
+                    </Button>
+                    <Button Click="OnAboutClick" ToolTipService.ToolTip="About Wrench Downloader">
+                        <FontIcon Glyph="&#xE946;" FontSize="14" />
+                    </Button>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- Main Downloads List (multi-select: Ctrl+Click, Shift+Click, checkboxes) -->
+        <ListView x:Name="DownloadsListView" Grid.Row="2" Padding="16" SelectionMode="Extended" IsMultiSelectCheckBoxEnabled="True" SelectionChanged="OnDownloadsSelectionChanged" KeyDown="OnDownloadsListKeyDown">
+            <ListView.ItemTemplate>
+                <DataTemplate x:DataType="local:DownloadItem">
+                    <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" 
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" 
+                            BorderThickness="1" 
+                            CornerRadius="8" 
+                            Padding="14,12" 
+                            Margin="0,0,0,8">
+                        <Border.ContextFlyout>
+                            <MenuFlyout>
+                                <MenuFlyoutItem Text="Remove from List" Click="OnRemoveDownloadClick">
+                                    <MenuFlyoutItem.Icon>
+                                        <FontIcon Glyph="&#xE74D;" />
+                                    </MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <MenuFlyoutItem Text="Delete File" Click="OnDeleteDownloadedFileClick">
+                                    <MenuFlyoutItem.Icon>
+                                        <FontIcon Glyph="&#xE74D;" Foreground="IndianRed" />
+                                    </MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <MenuFlyoutSeparator />
+                                <MenuFlyoutItem Text="Open File" Click="OnOpenFileClick">
+                                    <MenuFlyoutItem.Icon>
+                                        <FontIcon Glyph="&#xE8E5;" />
+                                    </MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <MenuFlyoutItem Text="Open Containing Folder" Click="OnOpenContainingFolderClick">
+                                    <MenuFlyoutItem.Icon>
+                                        <FontIcon Glyph="&#xE8B7;" />
+                                    </MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <MenuFlyoutSeparator />
+                                <MenuFlyoutItem Text="Copy Download Link" Click="OnCopyDownloadLinkClick">
+                                    <MenuFlyoutItem.Icon>
+                                        <FontIcon Glyph="&#xE8C8;" />
+                                    </MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                            </MenuFlyout>
+                        </Border.ContextFlyout>
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+
+                            <Grid Grid.Row="0">
+                                <TextBlock Text="{x:Bind Title, Mode=OneWay}" FontWeight="SemiBold" FontSize="14" TextTrimming="CharacterEllipsis" MaxLines="1" />
+                                <TextBlock Text="{x:Bind SpeedText, Mode=OneWay}" HorizontalAlignment="Right" FontSize="12" FontWeight="SemiBold" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                            </Grid>
+
+                            <ProgressBar Grid.Row="1" Value="{x:Bind Progress, Mode=OneWay}" Maximum="100" Margin="0,8,0,6" Height="6" CornerRadius="3" />
+
+                            <Grid Grid.Row="2">
+                                <TextBlock Text="{x:Bind StatusText, Mode=OneWay}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Text="{x:Bind SizeText, Mode=OneWay}" HorizontalAlignment="Right" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                            </Grid>
+                        </Grid>
+                    </Border>
+                </DataTemplate>
+            </ListView.ItemTemplate>
+        </ListView>
+
+        <!-- Status Footer -->
+        <Border Grid.Row="3" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="0,1,0,0" Padding="16,8">
+            <TextBlock x:Name="StatusTextBlock" Text="Ready. Sniffed browser videos will prompt download directly." FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+        </Border>
+    </Grid>
+</Window>

@@ -49,6 +49,7 @@ PublishScripts/
 # Python test scripts & temp caches
 __pycache__/
 *.py
+!/.agents/**/*.py
 *.pyc
 *.part
 *.part-*

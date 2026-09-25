@@ -30,7 +30,7 @@
                     <TextBlock Text="🔧" FontSize="22" VerticalAlignment="Center" />
                     <TextBlock Text="Wrench Downloader" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center" />
                     <Border Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="4" Padding="6,2" VerticalAlignment="Center">
-                        <TextBlock Text="v26.1.1" FontSize="11" FontWeight="SemiBold" Foreground="White" />
+                        <TextBlock Text="v26.1.2" FontSize="11" FontWeight="SemiBold" Foreground="White" />
                     </Border>
                 </StackPanel>
 

@@ -1,5 +1,7 @@
 using System;
 using System.IO;
+using System.Text.Json;
+using System.Collections.Generic;
 using Windows.Storage;
 
 namespace WrenchDownloader;
@@ -17,12 +19,52 @@ public static class SettingsHelper
     private const string RunRegistryKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
     private const string AppName = "WrenchDownloader";
 
+    private static Dictionary<string, JsonElement>? _portableSettings;
     private static string? _cachedFolder;
     private static int? _cachedFragments;
     private static string? _cachedQuality;
     private static bool? _cachedShowDialog;
     private static bool? _cachedCloseToTray;
     private static bool? _cachedStartWithWindows;
+
+    public static bool IsPortable => PortablePaths.IsPortable;
+
+    private static T? ReadValue<T>(string key)
+    {
+        try
+        {
+            if (PortablePaths.IsPortable)
+            {
+                return LoadPortableSettings().TryGetValue(key, out var stored)
+                    ? stored.Deserialize<T>()
+                    : default;
+            }
+
+            var value = ApplicationData.Current.LocalSettings.Values[key];
+            return value is T typed ? typed : default;
+        }
+        catch
+        {
+            return default;
+        }
+    }
+
+    private static Dictionary<string, JsonElement> LoadPortableSettings()
+    {
+        if (_portableSettings != null) return _portableSettings;
+
+        try
+        {
+            if (File.Exists(PortablePaths.SettingsFilePath))
+            {
+                _portableSettings = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+                    File.ReadAllText(PortablePaths.SettingsFilePath));
+            }
+        }
+        catch { }
+
+        return _portableSettings ??= new Dictionary<string, JsonElement>();
+    }
 
     public static string DefaultDownloadsFolder =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
@@ -34,7 +76,7 @@ public static class SettingsHelper
             if (_cachedFolder != null) return _cachedFolder;
             try
             {
-                var v = ApplicationData.Current.LocalSettings.Values[FolderKey] as string;
+                var v = ReadValue<string>(FolderKey);
                 if (!string.IsNullOrWhiteSpace(v) && Directory.Exists(v))
                 {
                     _cachedFolder = v;
@@ -54,10 +96,10 @@ public static class SettingsHelper
             if (_cachedFragments.HasValue) return _cachedFragments.Value;
             try
             {
-                var v = ApplicationData.Current.LocalSettings.Values[FragmentsKey];
-                if (v is int i)
+                var v = ReadValue<int?>(FragmentsKey);
+                if (v.HasValue)
                 {
-                    _cachedFragments = Math.Clamp(i, 1, 32);
+                    _cachedFragments = Math.Clamp(v.Value, 1, 32);
                     return _cachedFragments.Value;
                 }
             }
@@ -74,7 +116,7 @@ public static class SettingsHelper
             if (_cachedQuality != null) return _cachedQuality;
             try
             {
-                var v = ApplicationData.Current.LocalSettings.Values[QualityKey] as string;
+                var v = ReadValue<string>(QualityKey);
                 if (!string.IsNullOrWhiteSpace(v))
                 {
                     _cachedQuality = v;
@@ -94,11 +136,11 @@ public static class SettingsHelper
             if (_cachedShowDialog.HasValue) return _cachedShowDialog.Value;
             try
             {
-                var v = ApplicationData.Current.LocalSettings.Values[ShowDialogKey];
-                if (v is bool b)
+                var v = ReadValue<bool?>(ShowDialogKey);
+                if (v.HasValue)
                 {
-                    _cachedShowDialog = b;
-                    return b;
+                    _cachedShowDialog = v.Value;
+                    return v.Value;
                 }
             }
             catch { }
@@ -117,11 +159,11 @@ public static class SettingsHelper
             if (_cachedCloseToTray.HasValue) return _cachedCloseToTray.Value;
             try
             {
-                var v = ApplicationData.Current.LocalSettings.Values[CloseToTrayKey];
-                if (v is bool b)
+                var v = ReadValue<bool?>(CloseToTrayKey);
+                if (v.HasValue)
                 {
-                    _cachedCloseToTray = b;
-                    return b;
+                    _cachedCloseToTray = v.Value;
+                    return v.Value;
                 }
             }
             catch { }
@@ -138,6 +180,7 @@ public static class SettingsHelper
 #if DEBUG
             return false;
 #else
+            if (PortablePaths.IsPortable) return false;
             if (_cachedStartWithWindows.HasValue) return _cachedStartWithWindows.Value;
             try
             {
@@ -156,6 +199,12 @@ public static class SettingsHelper
 
     public static void SetStartWithWindows(bool enable)
     {
+        if (PortablePaths.IsPortable)
+        {
+            _cachedStartWithWindows = false;
+            return;
+        }
+
         _cachedStartWithWindows = enable;
 #if !DEBUG
         try
@@ -192,14 +241,29 @@ public static class SettingsHelper
 
         try
         {
-            var values = ApplicationData.Current.LocalSettings.Values;
-            if (!string.IsNullOrWhiteSpace(folder) && Directory.Exists(folder))
-                values[FolderKey] = folder;
-            values[FragmentsKey] = _cachedFragments.Value;
-            if (!string.IsNullOrWhiteSpace(quality))
-                values[QualityKey] = quality;
-            values[ShowDialogKey] = showDialog;
-            values[CloseToTrayKey] = closeToTray;
+            if (PortablePaths.IsPortable)
+            {
+                var values = LoadPortableSettings();
+                if (!string.IsNullOrWhiteSpace(folder) && Directory.Exists(folder))
+                    values[FolderKey] = JsonSerializer.SerializeToElement(folder);
+                values[FragmentsKey] = JsonSerializer.SerializeToElement(_cachedFragments.Value);
+                if (!string.IsNullOrWhiteSpace(quality))
+                    values[QualityKey] = JsonSerializer.SerializeToElement(quality);
+                values[ShowDialogKey] = JsonSerializer.SerializeToElement(showDialog);
+                values[CloseToTrayKey] = JsonSerializer.SerializeToElement(closeToTray);
+                File.WriteAllText(PortablePaths.SettingsFilePath, JsonSerializer.Serialize(values, new JsonSerializerOptions { WriteIndented = true }));
+            }
+            else
+            {
+                var values = ApplicationData.Current.LocalSettings.Values;
+                if (!string.IsNullOrWhiteSpace(folder) && Directory.Exists(folder))
+                    values[FolderKey] = folder;
+                values[FragmentsKey] = _cachedFragments.Value;
+                if (!string.IsNullOrWhiteSpace(quality))
+                    values[QualityKey] = quality;
+                values[ShowDialogKey] = showDialog;
+                values[CloseToTrayKey] = closeToTray;
+            }
         }
         catch { }
     }

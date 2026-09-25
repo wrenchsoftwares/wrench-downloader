@@ -83,6 +83,7 @@ public sealed class SettingsDialog : ContentDialog
         {
             Content = "Start Wrench Downloader on Windows startup (minimized to tray)",
             IsChecked = SettingsHelper.StartWithWindows,
+            Visibility = SettingsHelper.IsPortable ? Visibility.Collapsed : Visibility.Visible,
             Margin = new Thickness(0, 4, 0, 0)
         };
 #endif

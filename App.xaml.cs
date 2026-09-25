@@ -31,7 +31,7 @@ public partial class App : Application
     /// </summary>
     public App()
     {
-        string logPath = System.IO.Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, "startup.log");
+        string logPath = PortablePaths.StartupLogPath;
         System.IO.File.AppendAllText(logPath, $"[{System.DateTime.Now}] App() constructor start\n");
         this.UnhandledException += (s, e) =>
         {
@@ -52,7 +52,7 @@ public partial class App : Application
     /// <param name="args">Details about the launch request and process.</param>
     protected override void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
     {
-        string logPath = System.IO.Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, "startup.log");
+        string logPath = PortablePaths.StartupLogPath;
         System.IO.File.AppendAllText(logPath, $"[{System.DateTime.Now}] OnLaunched start\n");
         try
         {

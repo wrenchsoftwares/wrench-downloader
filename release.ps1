@@ -15,6 +15,8 @@ $appDirectory = Join-Path $packageDirectory "Wrench Downloader"
 $archivePath = Join-Path $releaseRoot "$packageName.zip"
 $extensionSource = Join-Path $PSScriptRoot "chrome extension"
 $extensionDirectory = Join-Path $packageDirectory "Chrome Companion"
+$portableMarker = Join-Path $packageDirectory "portable.mode"
+$launcherPath = Join-Path $packageDirectory "Start Wrench Downloader.cmd"
 
 New-Item -ItemType Directory -Path $releaseRoot -Force | Out-Null
 if (Test-Path $packageDirectory) {
@@ -49,6 +51,8 @@ Copy-Item -LiteralPath $appPriPath -Destination (Join-Path $appDirectory "Wrench
 
 New-Item -ItemType Directory -Path $extensionDirectory -Force | Out-Null
 Copy-Item -Path (Join-Path $extensionSource "*") -Destination $extensionDirectory -Recurse -Force
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot "portable.mode") -Destination $portableMarker -Force
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot "Start Wrench Downloader.cmd") -Destination $launcherPath -Force
 
 if (-not (Test-Path (Join-Path $appDirectory "WrenchDownloader.exe"))) {
     throw "Release package is missing WrenchDownloader.exe"
@@ -58,6 +62,9 @@ if (-not (Test-Path (Join-Path $appDirectory "WrenchDownloader.pri"))) {
 }
 if (-not (Test-Path (Join-Path $extensionDirectory "manifest.json"))) {
     throw "Release package is missing the Chrome extension manifest"
+}
+if (-not (Test-Path $portableMarker) -or -not (Test-Path $launcherPath)) {
+    throw "Release package is missing the portable marker or launcher"
 }
 
 Compress-Archive -Path $packageDirectory -DestinationPath $archivePath -CompressionLevel Optimal -Force

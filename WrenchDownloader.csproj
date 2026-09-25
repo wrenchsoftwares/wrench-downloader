@@ -16,10 +16,10 @@
     <EnableMsixTooling>false</EnableMsixTooling>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>26.1.1</Version>
-    <AssemblyVersion>26.1.1.0</AssemblyVersion>
-    <FileVersion>26.1.1.0</FileVersion>
-    <InformationalVersion>26.1.1</InformationalVersion>
+    <Version>26.1.2</Version>
+    <AssemblyVersion>26.1.2.0</AssemblyVersion>
+    <FileVersion>26.1.2.0</FileVersion>
+    <InformationalVersion>26.1.2</InformationalVersion>
   </PropertyGroup>
 
   <ItemGroup>

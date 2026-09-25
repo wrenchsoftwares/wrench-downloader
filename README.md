@@ -1,4 +1,4 @@
-# 🔧 Wrench Downloader v26.1.1
+# 🔧 Wrench Downloader v26.1.2
 
 > High-speed multi-threaded media and file downloader with integrated Chrome Companion stream sniffer. An ultra-fast, modern alternative to IDM built with .NET 9 and Windows App SDK (WinUI 3).
 
@@ -19,7 +19,7 @@
 
 ### 1. Requirements
 - Windows 10 (version 1809 / build 17763) or Windows 11
-- [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0)
+- The portable release ZIP does not require a .NET installation. The .NET 9 SDK is only needed to build from source.
 
 ### 2. Build & Run Desktop App
 ```bash
@@ -33,15 +33,15 @@ dotnet run --project WrenchDownloader.csproj
 ```
 
 ### 3. Create a Release Package
-Run `./release.ps1` from PowerShell. It publishes an untrimmed, self-contained Windows x64 build and creates a versioned ZIP at `artifacts/releases/26.1.1/WrenchDownloader-26.1.1-win-x64.zip`. The extracted folder keeps the app runtime files in `Wrench Downloader` and the unpacked browser extension in `Chrome Companion`; launch `Wrench Downloader/WrenchDownloader.exe`.
+Run `./release.ps1` from PowerShell. It publishes a self-contained Windows x64 portable package at `artifacts/releases/26.1.2/WrenchDownloader-26.1.2-win-x64.zip`. Extract it to a writable folder and run `Start Wrench Downloader.cmd`. App settings, history, and startup logs stay in the package's `Data` folder. The app runtime and unpacked browser extension are separated into `Wrench Downloader` and `Chrome Companion` folders.
 
-The application resource index (`WrenchDownloader.pri`) is included beside the executable so WinUI can resolve its XAML resources at startup.
+The package includes the application resource index (`WrenchDownloader.pri`) beside the executable so WinUI can resolve its XAML resources at startup. Downloads are saved to the user's Downloads folder by default.
 
 ### 4. Install Chrome Companion Extension
 1. Open Google Chrome (or Edge/Brave/Chromium).
 2. Navigate to `chrome://extensions/`.
 3. Enable **Developer mode** in the top right corner.
-4. Click **Load unpacked** and select the `chrome extension` directory from this repository.
+4. Click **Load unpacked** and select `Chrome Companion` from the extracted release ZIP, or `chrome extension` from this repository.
 5. The extension will automatically connect to Wrench Downloader's local bridge on `http://127.0.0.1:45732`.
 
 ---
@@ -55,12 +55,12 @@ wrench-downloader/
 ├── ExtensionBridgeServer.cs      # Local HTTP bridge server for Chrome extension
 ├── MainWindow.xaml               # Main dashboard & download queue
 ├── SettingsDialog.cs             # App settings & configuration
-├── Package.appxmanifest          # App package manifest (v26.1.1)
+├── Package.appxmanifest          # App package manifest (v26.1.2)
 ├── chrome extension/             # Chrome Manifest V3 Companion extension
 │   ├── injected.js               # In-page fetch / XHR stream interceptor
 │   ├── content.js                # Video detector & floating download overlay
 │   ├── background.js             # Network request sniffer & desktop bridge
-│   └── manifest.json             # Extension manifest (v26.1.1)
+│   └── manifest.json             # Extension manifest (v26.1.2)
 ├── tests/                        # Playwright verification and integration scripts
 ├── push.bat                      # Windows one-click script to stage, commit & push to main
 ├── push.ps1                      # PowerShell script to push to main

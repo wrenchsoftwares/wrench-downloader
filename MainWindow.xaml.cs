@@ -19,15 +19,12 @@ public sealed partial class MainWindow : Window
     private TrayIconHelper? _trayIcon;
     private bool _isExplicitExit;
 #endif
-    private static readonly string HistoryFilePath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "WrenchDownloader",
-        "history.json");
+    private static readonly string HistoryFilePath = PortablePaths.HistoryFilePath;
 
     public MainWindow()
     {
         InitializeComponent();
-        Title = "Wrench Downloader v26.1.1";
+        Title = "Wrench Downloader v26.1.2";
         // Start Maximized:
         if (AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter presenter)
         {
@@ -432,7 +429,7 @@ public sealed partial class MainWindow : Window
         
         var titleStack = new StackPanel { Spacing = 2 };
         titleStack.Children.Add(new TextBlock { Text = "Wrench Downloader", FontSize = 18, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
-        titleStack.Children.Add(new TextBlock { Text = "Version 26.1.1", FontSize = 13, Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"] });
+        titleStack.Children.Add(new TextBlock { Text = "Version 26.1.2", FontSize = 13, Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"] });
         headerRow.Children.Add(titleStack);
         aboutPanel.Children.Add(headerRow);
 

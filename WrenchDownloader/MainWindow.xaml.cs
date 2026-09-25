@@ -24,8 +24,12 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
         Title = "Wrench Downloader v26.1";
-        AppWindow.Resize(new Windows.Graphics.SizeInt32(920, 620));
-
+        //AppWindow.Resize(new Windows.Graphics.SizeInt32(920, 620));
+        // Start Maximized:
+        if (AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter presenter)
+        {
+            presenter.Maximize();
+        }
         DownloadsListView.ItemsSource = Downloads;
         Downloads.CollectionChanged += (s, e) =>
         {
@@ -33,9 +37,12 @@ public sealed partial class MainWindow : Window
             SaveHistory();
         };
 
-        // Load existing history or scan downloads folder
+        // Load existing history
         LoadHistory();
         UpdateCounts();
+
+        // Flush history immediately on window closing/closed
+        Closed += (s, e) => SaveHistoryToFile();
 
         // Start Extension Bridge Server
         _bridgeServer = new ExtensionBridgeServer(OnExtensionDownloadRequested);
@@ -50,7 +57,7 @@ public sealed partial class MainWindow : Window
             {
                 string json = File.ReadAllText(HistoryFilePath);
                 var loaded = JsonSerializer.Deserialize<List<DownloadItem>>(json);
-                if (loaded != null && loaded.Count > 0)
+                if (loaded != null)
                 {
                     foreach (var item in loaded)
                     {
@@ -62,8 +69,9 @@ public sealed partial class MainWindow : Window
                         }
                         Downloads.Add(item);
                     }
-                    return;
                 }
+                // Once history.json exists (even if empty because the user removed items), do NOT scan the folder.
+                return;
             }
         }
         catch (Exception ex)
@@ -71,7 +79,8 @@ public sealed partial class MainWindow : Window
             Debug.WriteLine($"Failed to load history: {ex.Message}");
         }
 
-        // Fallback: If no history file exists yet, scan the download folder for media files
+        // First run only (when history.json does not exist at all):
+        // Scan the download folder once to populate initial files, then save history.json so it never re-scans.
         try
         {
             string folder = SettingsHelper.DownloadFolder;
@@ -101,6 +110,7 @@ public sealed partial class MainWindow : Window
                     Downloads.Add(item);
                 }
             }
+            SaveHistoryToFile();
         }
         catch (Exception ex)
         {
@@ -111,8 +121,19 @@ public sealed partial class MainWindow : Window
     private readonly object _saveLock = new();
     private System.Threading.Timer? _saveDebounceTimer;
 
-    public void SaveHistory()
+    public void SaveHistory(bool immediate = false)
     {
+        if (immediate)
+        {
+            lock (_saveLock)
+            {
+                _saveDebounceTimer?.Dispose();
+                _saveDebounceTimer = null;
+            }
+            SaveHistoryToFile();
+            return;
+        }
+
         // Debounce to prevent repetitive synchronous disk writes freezing the UI
         lock (_saveLock)
         {
@@ -257,6 +278,7 @@ public sealed partial class MainWindow : Window
             try { item.Cts.Cancel(); } catch { }
             Downloads.Remove(item);
         }
+        SaveHistory(immediate: true);
         StatusTextBlock.Text = $"Removed {targets.Count} item{(targets.Count == 1 ? "" : "s")}.";
     }
 
@@ -273,6 +295,7 @@ public sealed partial class MainWindow : Window
             try { item.Cts.Cancel(); } catch { }
             Downloads.Remove(item);
         }
+        SaveHistory(immediate: true);
         StatusTextBlock.Text = $"Removed {selected.Count} selected item{(selected.Count == 1 ? "" : "s")}.";
     }
 
@@ -285,6 +308,7 @@ public sealed partial class MainWindow : Window
             return;
         }
         foreach (var item in done) Downloads.Remove(item);
+        SaveHistory(immediate: true);
         StatusTextBlock.Text = $"Removed {done.Count} completed download{(done.Count == 1 ? "" : "s")}.";
     }
 
@@ -298,6 +322,7 @@ public sealed partial class MainWindow : Window
         foreach (var item in Downloads) { try { item.Cts.Cancel(); } catch { } }
         int n = Downloads.Count;
         Downloads.Clear();
+        SaveHistory(immediate: true);
         StatusTextBlock.Text = $"Cleared {n} item{(n == 1 ? "" : "s")} (active downloads cancelled).";
     }
 
@@ -396,6 +421,7 @@ public sealed partial class MainWindow : Window
                 try { File.Delete(item.SavePath); deleted++; } catch { }
             }
         }
+        SaveHistory(immediate: true);
         StatusTextBlock.Text = $"Removed {targets.Count} item{(targets.Count == 1 ? "" : "s")}, deleted {deleted} file{(deleted == 1 ? "" : "s")} from disk.";
     }
 

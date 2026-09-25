@@ -292,7 +292,7 @@
   }
 
   // Generic title: embedded metadata first (usually the clean content
-  // title without any site suffix), page title otherwise. No site lists.
+  // title without any site suffix), page title otherwise.
   function getCleanVideoTitle(video) {
     if (video) {
       const ctx = getVideoContext(video);
@@ -305,17 +305,37 @@
     } catch (e) {}
     if (!title) title = (document.title || "").trim();
 
+    // Specific YouTube selector checks if available on page
+    try {
+      const ytTitleEl = document.querySelector("#title h1 yt-formatted-string, ytd-watch-metadata #title h1, h1.ytd-watch-metadata");
+      if (ytTitleEl && ytTitleEl.textContent && ytTitleEl.textContent.trim()) {
+        title = ytTitleEl.textContent.trim();
+      }
+    } catch (e) {}
+
+    // Strip common site brand suffixes (e.g. " - YouTube", " | Twitter", " / X", etc.)
+    title = title
+      .replace(/\s*[-–—|•/]\s*(YouTube|YouTube Music|X|Twitter|Vimeo|Dailymotion|Facebook|Instagram|TikTok|Reddit)\s*$/i, "")
+      .replace(/^[\(\[\{]\d+[\)\]\}]\s*/, "") // Strip notification counters e.g. "(1) Video Title"
+      .trim();
+
     const lower = title.toLowerCase();
-    if (!title || lower === "video" || lower === "watch" || lower === "reels") {
+    if (!title || lower === "video" || lower === "watch" || lower === "reels" || lower === "youtube" || lower === "x") {
       try {
-        const h1 = document.querySelector("h1");
+        const h1 = document.querySelector("#title h1, h1");
         if (h1 && h1.textContent.trim()) {
-          title = h1.textContent.trim().substring(0, 80);
+          const h1Text = h1.textContent.trim().substring(0, 80);
+          if (h1Text.toLowerCase() !== "youtube" && h1Text.toLowerCase() !== "video") {
+            title = h1Text;
+          }
         }
       } catch (e) {}
     }
     title = title.replace(/[\/\\:*?"<>|]/g, "").trim();
-    return title || "Video";
+    if (!title || title.toLowerCase() === "youtube") {
+      title = "Video";
+    }
+    return title;
   }
 
   function getCodecName(mimeType, format) {

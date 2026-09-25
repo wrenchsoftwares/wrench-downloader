@@ -89,17 +89,27 @@ public class DownloadEngine
         item.SpeedText = "Resolving...";
 
         string safeTitle = SanitizeFileName(item.Title);
-        bool isGenericTitle = string.IsNullOrWhiteSpace(safeTitle) || 
-                              safeTitle.Equals("master", StringComparison.OrdinalIgnoreCase) || 
-                              safeTitle.Equals("index", StringComparison.OrdinalIgnoreCase) ||
-                              safeTitle.Equals("video", StringComparison.OrdinalIgnoreCase) ||
-                              safeTitle.Equals("Direct Download", StringComparison.OrdinalIgnoreCase) ||
-                              safeTitle.StartsWith("view_video", StringComparison.OrdinalIgnoreCase) ||
-                              safeTitle.StartsWith("watch", StringComparison.OrdinalIgnoreCase);
+        // Clean off quality suffixes if present in item.Title (e.g. "Title - 1080p" -> "Title")
+        string strippedTitle = Regex.Replace(safeTitle, @"\s*[-–—]\s*(?:\d{3,4}p|best|audio|video)$", "", RegexOptions.IgnoreCase).Trim();
+
+        bool isGenericTitle = string.IsNullOrWhiteSpace(strippedTitle) || 
+                               strippedTitle.Equals("master", StringComparison.OrdinalIgnoreCase) || 
+                               strippedTitle.Equals("index", StringComparison.OrdinalIgnoreCase) ||
+                               strippedTitle.Equals("video", StringComparison.OrdinalIgnoreCase) ||
+                               strippedTitle.Equals("Direct Download", StringComparison.OrdinalIgnoreCase) ||
+                               strippedTitle.Equals("Video_Download", StringComparison.OrdinalIgnoreCase) ||
+                               strippedTitle.Equals("Video Download", StringComparison.OrdinalIgnoreCase) ||
+                               strippedTitle.Equals("YouTube", StringComparison.OrdinalIgnoreCase) ||
+                               strippedTitle.StartsWith("view_video", StringComparison.OrdinalIgnoreCase) ||
+                               strippedTitle.StartsWith("watch", StringComparison.OrdinalIgnoreCase);
 
         if (isGenericTitle)
         {
             safeTitle = "Video_Download";
+        }
+        else
+        {
+            safeTitle = strippedTitle;
         }
 
         bool isAudio = string.Equals(item.Quality, "audio", StringComparison.OrdinalIgnoreCase) ||
@@ -119,7 +129,24 @@ public class DownloadEngine
             safeTitle = safeTitle[..^4].TrimEnd();
 
         string ext = isAudio ? "mp3" : "mp4";
+
+        if (!isGenericTitle)
+        {
+            // If file already exists with same name, increment number: "Title (1)", "Title (2)", etc.
+            string baseSafeTitle = safeTitle;
+            int count = 1;
+            while (File.Exists(Path.Combine(downloadsFolder, $"{safeTitle}.{ext}")) ||
+                   File.Exists(Path.Combine(downloadsFolder, $"{safeTitle}.mp4")) ||
+                   File.Exists(Path.Combine(downloadsFolder, $"{safeTitle}.mkv")) ||
+                   File.Exists(Path.Combine(downloadsFolder, $"{safeTitle}.webm")) ||
+                   File.Exists(Path.Combine(downloadsFolder, $"{safeTitle}.mp3")))
+            {
+                safeTitle = $"{baseSafeTitle} ({count++})";
+            }
+        }
+
         // If title is generic or from a webpage script, let yt-dlp determine the real video title!
+        // %(autonumber)s or yt-dlp template can be used, and after download completion we also ensure collision number.
         string outputTemplate = isGenericTitle
             ? Path.Combine(downloadsFolder, "%(title)s.%(ext)s")
             : Path.Combine(downloadsFolder, $"{safeTitle}.%(ext)s");
@@ -340,7 +367,11 @@ public class DownloadEngine
                 if (!string.IsNullOrEmpty(finalFile))
                 {
                     item.SavePath = finalFile;
-                    if (isGenericTitle) item.Title = Path.GetFileNameWithoutExtension(finalFile);
+                    string currentName = Path.GetFileNameWithoutExtension(finalFile);
+                    if (isGenericTitle)
+                    {
+                        item.Title = currentName;
+                    }
                 }
                 item.StatusText = $"Completed! Saved to {Path.GetFileName(item.SavePath)}";
                 succeeded = true;
@@ -431,17 +462,8 @@ public class DownloadEngine
             {
                 safeTitle = safeTitle[..^rawExt.Length].TrimEnd();
             }
-            string fileName = $"{safeTitle}{rawExt}";
-            item.SavePath = Path.Combine(downloadsFolder, fileName);
-
-            // Avoid collision
-            int count = 1;
-            string baseName = Path.GetFileNameWithoutExtension(item.SavePath);
-            string ext = Path.GetExtension(item.SavePath);
-            while (File.Exists(item.SavePath))
-            {
-                item.SavePath = Path.Combine(downloadsFolder, $"{baseName} ({count++}){ext}");
-            }
+            // Avoid collision: file (1).ext, file (2).ext
+            item.SavePath = GetUniqueFilePath(downloadsFolder, safeTitle, rawExt);
 
             using var contentStream = await response.Content.ReadAsStreamAsync(cancellationToken);
             using var fileStream = new FileStream(item.SavePath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, true);
@@ -496,6 +518,24 @@ public class DownloadEngine
             name = name.Replace(c, '_');
         }
         return name;
+    }
+
+    public static string GetUniqueFilePath(string folder, string baseTitle, string ext)
+    {
+        if (!ext.StartsWith('.')) ext = "." + ext;
+        string safe = SanitizeFileName(baseTitle).Trim();
+        if (string.IsNullOrWhiteSpace(safe)) safe = "download";
+
+        string target = Path.Combine(folder, $"{safe}{ext}");
+        if (!File.Exists(target)) return target;
+
+        int num = 1;
+        while (true)
+        {
+            target = Path.Combine(folder, $"{safe} ({num}){ext}");
+            if (!File.Exists(target)) return target;
+            num++;
+        }
     }
 
     public static string FormatBytes(long bytes)

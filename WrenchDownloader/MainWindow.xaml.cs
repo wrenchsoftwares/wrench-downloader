@@ -202,16 +202,27 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        string initialTitle = Path.GetFileName(new Uri(url).AbsolutePath);
-        if (string.IsNullOrWhiteSpace(initialTitle) ||
-            initialTitle.Equals("view_video.php", StringComparison.OrdinalIgnoreCase) ||
-            initialTitle.Equals("watch", StringComparison.OrdinalIgnoreCase) ||
-            initialTitle.Equals("video", StringComparison.OrdinalIgnoreCase) ||
-            initialTitle.EndsWith(".php", StringComparison.OrdinalIgnoreCase) ||
-            initialTitle.EndsWith(".html", StringComparison.OrdinalIgnoreCase) ||
-            initialTitle.EndsWith(".htm", StringComparison.OrdinalIgnoreCase))
+        string initialTitle = "";
+        try
         {
-            initialTitle = "Video Download";
+            var uri = new Uri(url);
+            initialTitle = Path.GetFileName(uri.AbsolutePath);
+            if (uri.Host.Contains("youtube.com", StringComparison.OrdinalIgnoreCase) || 
+                uri.Host.Contains("youtu.be", StringComparison.OrdinalIgnoreCase) ||
+                string.IsNullOrWhiteSpace(initialTitle) ||
+                initialTitle.Equals("watch", StringComparison.OrdinalIgnoreCase) ||
+                initialTitle.Equals("view_video.php", StringComparison.OrdinalIgnoreCase) ||
+                initialTitle.Equals("video", StringComparison.OrdinalIgnoreCase) ||
+                initialTitle.EndsWith(".php", StringComparison.OrdinalIgnoreCase) ||
+                initialTitle.EndsWith(".html", StringComparison.OrdinalIgnoreCase) ||
+                initialTitle.EndsWith(".htm", StringComparison.OrdinalIgnoreCase))
+            {
+                initialTitle = "Video_Download";
+            }
+        }
+        catch
+        {
+            initialTitle = "Video_Download";
         }
 
         var item = new DownloadItem

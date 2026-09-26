@@ -288,6 +288,14 @@ public class DownloadEngine
 
         string commonArgs = argsBuilder.ToString();
 
+        // Pornhub-style challenge sites: the page serves a JS challenge that
+        // yt-dlp can only solve via the legacy PhantomJS binary (node/deno do
+        // NOT substitute there), while captured CDN links are signed with a
+        // short TTL and die with 410 Gone. The reliable path is the source
+        // page combined with the browser's validated session (--cookies-from-
+        // browser reuses the challenge cookies your real browser already has).
+        bool isChallengeSite = IsChallengeSite(item);
+
         // Captured stream URLs (signed HLS links) can expire (410 Gone) before
         // the download starts. Fall back to the source page, which yt-dlp re-resolves.
         var candidateUrls = new List<string>();
@@ -321,13 +329,41 @@ public class DownloadEngine
         }
 
         bool succeeded = false;
-        var pendingUrls = new Queue<string>(candidateUrls);
+        // Per-attempt plan: (url, useBrowserCookies). Challenge sites always
+        // try the page first (fresh signed links beat stale captured ones),
+        // with the browser session first and a cookie-less retry as fallback.
+        var plan = new List<(string Url, bool UseCookies)>();
+        if (isChallengeSite)
+        {
+            if (!string.IsNullOrWhiteSpace(item.PageUrl))
+            {
+                plan.Add((item.PageUrl, true));
+                plan.Add((item.PageUrl, false));
+            }
+            foreach (string u in candidateUrls)
+            {
+                if (!plan.Any(p => p.Url.Equals(u, StringComparison.OrdinalIgnoreCase)))
+                    plan.Add((u, false));
+            }
+            if (plan.Count == 0 && !string.IsNullOrWhiteSpace(item.Url))
+                plan.Add((item.Url, false));
+        }
+        else
+        {
+            foreach (string u in candidateUrls)
+                plan.Add((u, false));
+        }
+        var pendingUrls = new Queue<(string Url, bool UseCookies)>(plan);
         int sameUrlRetries = 0;
         bool firstTry = true;
 
         while (pendingUrls.Count > 0 && !succeeded)
         {
-            string attemptUrl = pendingUrls.Peek();
+            var attempt = pendingUrls.Peek();
+            string attemptUrl = attempt.Url;
+            string attemptArgs = attempt.UseCookies
+                ? commonArgs + "--cookies-from-browser chrome "
+                : commonArgs;
             if (!firstTry)
             {
                 item.Progress = 0;
@@ -339,7 +375,7 @@ public class DownloadEngine
             var psi = new ProcessStartInfo
             {
                 FileName = ytdlpPath,
-                Arguments = $"{commonArgs}-P \"temp:{temporaryFolder}\" -o \"{outputTemplate}\" \"{attemptUrl}\"",
+                Arguments = $"{attemptArgs}-P \"temp:{temporaryFolder}\" -o \"{outputTemplate}\" \"{attemptUrl}\"",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
@@ -350,6 +386,7 @@ public class DownloadEngine
         {
             using var proc = new Process { StartInfo = psi };
             string lastError = "";
+            bool cookiesFailed = false;
             
             // Regexes for parsing yt-dlp progress (handling ~ in HLS estimates and ETA)
             var progressRegex = new Regex(@"\[download\]\s+([\d\.]+)%\s+of\s+(?:~?\s*)([^\s]+)\s+at\s+([^\s]+)(?:\s+ETA\s+([^\s]+))?", RegexOptions.Compiled);
@@ -428,6 +465,18 @@ public class DownloadEngine
                     {
                         lastError = errLine;
                     }
+                    // Browser-session unavailable (no Chrome, locked profile, ...):
+                    // cookie attempts would all fail identically, skip them.
+                    if (errLine.Contains("ould not copy", StringComparison.OrdinalIgnoreCase) &&
+                        errLine.Contains("cookie", StringComparison.OrdinalIgnoreCase))
+                    {
+                        cookiesFailed = true;
+                    }
+                    else if (errLine.Contains("cookies-from-browser", StringComparison.OrdinalIgnoreCase) &&
+                             errLine.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        cookiesFailed = true;
+                    }
                 }
             };
 
@@ -471,9 +520,24 @@ public class DownloadEngine
                     break;
                 }
 
+                // Browser session unavailable: drop every remaining cookie
+                // attempt (same guaranteed failure), keep the plain ones.
+                if (cookiesFailed)
+                {
+                    var remaining = pendingUrls.Where(p => !p.UseCookies).ToList();
+                    pendingUrls.Clear();
+                    foreach (var p in remaining) pendingUrls.Enqueue(p);
+                }
+
+                bool linkExpired = lastError.Contains("410", StringComparison.OrdinalIgnoreCase) &&
+                                   (lastError.Contains("gone", StringComparison.OrdinalIgnoreCase) ||
+                                    lastError.Contains("unable to download", StringComparison.OrdinalIgnoreCase));
                 // Flaky endpoints (rate limits, Cloudflare walls, empty JSON):
                 // retry the same URL briefly before giving up on it.
-                bool rateLimited = Regex.IsMatch(lastError, @"\b429\b|rate.?limit|too many requests|timed out|timeout|failed to parse json|unable to download.*json|\b50[234]\b|bad gateway|service unavailable|gateway timeout|temporary failure", RegexOptions.IgnoreCase);
+                // Skipped for expired signed links (410: retrying is pointless)
+                // and for cookie-setup failures (not transient).
+                bool rateLimited = !linkExpired && !cookiesFailed &&
+                    Regex.IsMatch(lastError, @"\b429\b|rate.?limit|too many requests|timed out|timeout|failed to parse json|unable to download.*json|\b50[234]\b|bad gateway|service unavailable|gateway timeout|temporary failure", RegexOptions.IgnoreCase);
                 if (rateLimited && sameUrlRetries < 2)
                 {
                     sameUrlRetries++;
@@ -483,7 +547,10 @@ public class DownloadEngine
                     continue;
                 }
                 sameUrlRetries = 0;
-                pendingUrls.Dequeue();
+                // Cookie-failed attempts were already excluded by the rebuild
+                // above, so the queue head is the next untried attempt.
+                if (!cookiesFailed)
+                    pendingUrls.Dequeue();
                 if (pendingUrls.Count > 0)
                 {
                     // Next candidate source (e.g. the page re-resolves expired links).
@@ -496,7 +563,12 @@ public class DownloadEngine
                 item.Status = DownloadStatus.Failed;
                 if (!string.IsNullOrWhiteSpace(lastError))
                 {
-                    item.StatusText = lastError.Length > 90 ? lastError[..90] + "..." : lastError;
+                    bool expired = lastError.Contains("410", StringComparison.OrdinalIgnoreCase) &&
+                                   (lastError.Contains("gone", StringComparison.OrdinalIgnoreCase) ||
+                                    lastError.Contains("unable to download", StringComparison.OrdinalIgnoreCase));
+                    item.StatusText = expired
+                        ? AppLocalization.Get("download.linkExpired")
+                        : lastError.Length > 90 ? lastError[..90] + "..." : lastError;
                 }
                 else
                 {
@@ -745,6 +817,20 @@ public class DownloadEngine
     });
 
     private static string FindJsRuntimeArgs() => _cachedJsRuntimeArgs.Value;
+
+    /// <summary>
+    /// Sites whose pages sit behind a JS challenge (yt-dlp only solves it via
+    /// the legacy PhantomJS binary) and whose CDN links are short-lived signed
+    /// URLs. For these, the source page + browser session is the reliable path.
+    /// </summary>
+    private static bool IsChallengeSite(DownloadItem item)
+    {
+        string combined = $"{item.Url} {item.PageUrl} {item.Referrer}";
+        return combined.Contains("pornhub.com", StringComparison.OrdinalIgnoreCase)
+            || combined.Contains("pornhub.net", StringComparison.OrdinalIgnoreCase)
+            || combined.Contains("pornhub.org", StringComparison.OrdinalIgnoreCase)
+            || combined.Contains("pornhubpremium.com", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static async Task<string> EnsurePlayableMediaFileAsync(string downloadsFolder, string safeTitle, string expectedExt, string knownPath, CancellationToken cancellationToken = default)
     {

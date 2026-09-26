@@ -4,7 +4,7 @@ param(
 
 <#
 .SYNOPSIS
-    Builds the Wrench Downloader Setup.exe installer (primary 26.2 distribution).
+    Builds the Wrench Downloader Setup.exe installer (primary 26.2.1 distribution).
 .DESCRIPTION
     Publishes the self-contained app, stages it WITHOUT portable.mode
     (installed mode => settings/history live in %LOCALAPPDATA%\WrenchDownloader),

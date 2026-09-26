@@ -122,6 +122,7 @@
   "download.unknownSize": "حجم غير معروف",
   "download.pausedSpeed": "متوقف مؤقتاً",
   "download.resuming": "جارٍ الاستئناف...",
+  "download.linkExpired": "انتهت صلاحية الرابط (410). أعد تشغيل الفيديو في المتصفح ثم حاول مجدداً.",
   "settings.appearanceTab": "المظهر",
   "settings.themeHeader": "وضع العرض",
   "settings.themeHint": "يتبع نظام Windows افتراضياً. تُطبق التغييرات فوراً على جميع النوافذ.",

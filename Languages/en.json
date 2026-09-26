@@ -122,6 +122,7 @@
   "download.unknownSize": "Unknown size",
   "download.pausedSpeed": "Paused",
   "download.resuming": "Resuming...",
+  "download.linkExpired": "Link expired (410). Replay the video in your browser, then retry.",
   "settings.appearanceTab": "Appearance",
   "settings.themeHeader": "Display mode",
   "settings.themeHint": "Follows Windows by default. Changes apply immediately to all windows.",

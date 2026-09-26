@@ -24,6 +24,8 @@ public sealed partial class MainWindow : Window
     private bool _clipboardMonitoringAttached;
     private SettingsWindow? _settingsWindow;
     private readonly Dictionary<string, int> _retryCounts = new(StringComparer.Ordinal);
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _taskbarTimer;
+    private IntPtr _taskbarHwnd = IntPtr.Zero;
 #if !DEBUG
     private TrayIconHelper? _trayIcon;
     private bool _isExplicitExit;
@@ -68,6 +70,8 @@ public sealed partial class MainWindow : Window
 #endif
             if (_clipboardMonitoringAttached)
             Windows.ApplicationModel.DataTransfer.Clipboard.ContentChanged -= OnClipboardContentChanged;
+            try { _taskbarTimer?.Stop(); } catch { }
+            TaskbarProgress.Reset(_taskbarHwnd);
             SaveHistoryToFile();
         };
 
@@ -99,6 +103,44 @@ public sealed partial class MainWindow : Window
         _downloadQueueTimer.Interval = TimeSpan.FromSeconds(10);
         _downloadQueueTimer.Tick += (_, _) => PumpDownloadQueue();
         _downloadQueueTimer.Start();
+
+        // Mirror aggregate download progress onto the Windows taskbar button.
+        try { _taskbarHwnd = WinRT.Interop.WindowNative.GetWindowHandle(this); } catch { }
+        _taskbarTimer = DispatcherQueue.CreateTimer();
+        _taskbarTimer.Interval = TimeSpan.FromMilliseconds(500);
+        _taskbarTimer.Tick += (_, _) => UpdateTaskbarProgress();
+        _taskbarTimer.Start();
+    }
+
+    private void UpdateTaskbarProgress()
+    {
+        try
+        {
+            if (_taskbarHwnd == IntPtr.Zero) return;
+            var pending = Downloads
+                .Where(d => d.Status == DownloadStatus.Downloading ||
+                            d.Status == DownloadStatus.Queued ||
+                            d.Status == DownloadStatus.Paused)
+                .ToList();
+            if (pending.Count > 0)
+            {
+                double avg = pending.Average(d => Math.Clamp(d.Progress, 0, 100));
+                bool paused = _downloadQueuePaused ||
+                              pending.All(d => d.Status == DownloadStatus.Paused);
+                TaskbarProgress.Update(_taskbarHwnd, (ulong)(avg * 10), 1000,
+                    paused ? TaskbarProgress.TaskbarState.Paused
+                           : TaskbarProgress.TaskbarState.Normal);
+            }
+            else if (Downloads.Any(d => d.Status == DownloadStatus.Failed))
+            {
+                TaskbarProgress.Update(_taskbarHwnd, 1000, 1000, TaskbarProgress.TaskbarState.Error);
+            }
+            else
+            {
+                TaskbarProgress.Reset(_taskbarHwnd);
+            }
+        }
+        catch { }
     }
 
 #if !DEBUG

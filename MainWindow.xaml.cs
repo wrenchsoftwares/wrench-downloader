@@ -35,6 +35,14 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
         ApplyLocalization();
         ThemeHelper.ApplyTheme(this);
+        LoadAppLogo();
+        try
+        {
+            string iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "AppIcon.ico");
+            if (File.Exists(iconPath))
+                AppWindow.SetIcon(iconPath);
+        }
+        catch { }
         // Start Maximized:
         if (AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter presenter)
         {
@@ -682,6 +690,38 @@ public sealed partial class MainWindow : Window
     [DllImport("user32.dll")]
     private static extern bool MessageBeep(uint uType);
 
+    /// <summary>App logo from disk (absolute path beats ms-appx flakiness in unpackaged builds).</summary>
+    public static Microsoft.UI.Xaml.Media.Imaging.BitmapImage? LoadLogoImage(int decodeWidth = 0)
+    {
+        try
+        {
+            string logoPath = Path.Combine(AppContext.BaseDirectory, "Assets", "Logo.png");
+            if (!File.Exists(logoPath))
+                return null;
+            var image = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(logoPath));
+            if (decodeWidth > 0)
+                image.DecodePixelWidth = decodeWidth;
+            return image;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private void LoadAppLogo()
+    {
+        try
+        {
+            var logo = LoadLogoImage(48);
+            if (logo != null)
+                AppLogoImage.Source = logo;
+            else
+                AppLogoImage.Visibility = Visibility.Collapsed;
+        }
+        catch { }
+    }
+
     private static void PlayCompletionSound()
     {
         try { MessageBeep(0x00000040); } catch { }
@@ -756,7 +796,9 @@ public sealed partial class MainWindow : Window
         var aboutPanel = new StackPanel { Spacing = 12, MinWidth = 360 };
 
         var headerRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, VerticalAlignment = VerticalAlignment.Center };
-        headerRow.Children.Add(new TextBlock { Text = "🔧", FontSize = 28, VerticalAlignment = VerticalAlignment.Center });
+        var aboutLogo = LoadLogoImage(64);
+        if (aboutLogo != null)
+            headerRow.Children.Add(new Image { Source = aboutLogo, Width = 30, Height = 30, VerticalAlignment = VerticalAlignment.Center });
         
         var titleStack = new StackPanel { Spacing = 2 };
         titleStack.Children.Add(new TextBlock { Text = AppLocalization.Get("app.title"), FontSize = 18, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });

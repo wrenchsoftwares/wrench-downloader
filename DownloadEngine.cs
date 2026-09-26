@@ -222,6 +222,7 @@ public class DownloadEngine
         string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         string pythonYtDlp = Path.Combine(localAppData, @"Programs\Python\Python312\Scripts\yt-dlp.exe");
         if (File.Exists(pythonYtDlp)) ytdlpPath = pythonYtDlp;
+        LogDiag(item, $"start quality={item.Quality} ytdlp={ytdlpPath} version={YtDlpVersion(ytdlpPath)}");
 
         var argsBuilder = new StringBuilder();
         // IDM-style parallel segment download flags with robust retry & timeout settings to ensure it completes
@@ -329,31 +330,42 @@ public class DownloadEngine
         }
 
         bool succeeded = false;
-        // Per-attempt plan: (url, useBrowserCookies). Challenge sites always
-        // try the page first (fresh signed links beat stale captured ones),
-        // with the browser session first and a cookie-less retry as fallback.
-        var plan = new List<(string Url, bool UseCookies)>();
+        // Per-attempt plan: (url, extra yt-dlp args). Challenge sites always
+        // try the page first (fresh signed links beat stale captured ones):
+        // natively-solved session cookie first, browser session second,
+        // plain third. The solved cookie is always fresh, unlike exported
+        // browser cookies which may be stale or single-use.
+        string? challengeCookieFile = null;
+        var plan = new List<(string Url, string? CookieArgs)>();
         if (isChallengeSite)
         {
+            string? pageForSolve = !string.IsNullOrWhiteSpace(item.PageUrl) ? item.PageUrl : item.Url;
+            try { challengeCookieFile = await PornhubChallengeSolver.CreateCookieFileAsync(pageForSolve, cancellationToken); }
+            catch { challengeCookieFile = null; }
+            LogDiag(item, challengeCookieFile != null
+                ? "challenge solved, session cookie ready"
+                : "no challenge session (will try browser cookies)");
             if (!string.IsNullOrWhiteSpace(item.PageUrl))
             {
-                plan.Add((item.PageUrl, true));
-                plan.Add((item.PageUrl, false));
+                if (challengeCookieFile != null)
+                    plan.Add((item.PageUrl, $"--cookies \"{challengeCookieFile}\" "));
+                plan.Add((item.PageUrl, "--cookies-from-browser chrome "));
+                plan.Add((item.PageUrl, null));
             }
             foreach (string u in candidateUrls)
             {
                 if (!plan.Any(p => p.Url.Equals(u, StringComparison.OrdinalIgnoreCase)))
-                    plan.Add((u, false));
+                    plan.Add((u, null));
             }
             if (plan.Count == 0 && !string.IsNullOrWhiteSpace(item.Url))
-                plan.Add((item.Url, false));
+                plan.Add((item.Url, null));
         }
         else
         {
             foreach (string u in candidateUrls)
-                plan.Add((u, false));
+                plan.Add((u, null));
         }
-        var pendingUrls = new Queue<(string Url, bool UseCookies)>(plan);
+        var pendingUrls = new Queue<(string Url, string? CookieArgs)>(plan);
         int sameUrlRetries = 0;
         bool firstTry = true;
 
@@ -361,9 +373,7 @@ public class DownloadEngine
         {
             var attempt = pendingUrls.Peek();
             string attemptUrl = attempt.Url;
-            string attemptArgs = attempt.UseCookies
-                ? commonArgs + "--cookies-from-browser chrome "
-                : commonArgs;
+            string attemptArgs = commonArgs + (attempt.CookieArgs ?? "");
             if (!firstTry)
             {
                 item.Progress = 0;
@@ -464,6 +474,11 @@ public class DownloadEngine
                     if (errLine.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase))
                     {
                         lastError = errLine;
+                        LogDiag(item, $"yt-dlp error: {errLine}");
+                    }
+                    else if (errLine.StartsWith("WARNING:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        LogDiag(item, $"yt-dlp warning: {errLine}");
                     }
                     // Browser-session unavailable (no Chrome, locked profile, ...):
                     // cookie attempts would all fail identically, skip them.
@@ -480,6 +495,7 @@ public class DownloadEngine
                 }
             };
 
+            LogDiag(item, $"attempt url={attemptUrl} cookies={(attempt.CookieArgs != null ? attempt.CookieArgs.Trim() : "none")}");
             proc.Start();
             proc.BeginOutputReadLine();
             proc.BeginErrorReadLine();
@@ -520,11 +536,13 @@ public class DownloadEngine
                     break;
                 }
 
-                // Browser session unavailable: drop every remaining cookie
+                // Browser session unavailable: drop every remaining browser-cookie
                 // attempt (same guaranteed failure), keep the plain ones.
                 if (cookiesFailed)
                 {
-                    var remaining = pendingUrls.Where(p => !p.UseCookies).ToList();
+                    var remaining = pendingUrls
+                        .Where(p => p.CookieArgs == null || !p.CookieArgs.Contains("cookies-from-browser"))
+                        .ToList();
                     pendingUrls.Clear();
                     foreach (var p in remaining) pendingUrls.Enqueue(p);
                 }
@@ -561,6 +579,7 @@ public class DownloadEngine
                     continue;
                 }
                 item.Status = DownloadStatus.Failed;
+                LogDiag(item, $"terminal failure: {lastError}");
                 if (!string.IsNullOrWhiteSpace(lastError))
                 {
                     bool expired = lastError.Contains("410", StringComparison.OrdinalIgnoreCase) &&
@@ -598,6 +617,7 @@ public class DownloadEngine
             break;
         }
         }
+        PornhubChallengeSolver.DeleteCookieFile(challengeCookieFile);
     }
 
     private static async Task DownloadDirectHttpAsync(DownloadItem item, string downloadsFolder, CancellationToken cancellationToken)
@@ -830,6 +850,42 @@ public class DownloadEngine
             || combined.Contains("pornhub.net", StringComparison.OrdinalIgnoreCase)
             || combined.Contains("pornhub.org", StringComparison.OrdinalIgnoreCase)
             || combined.Contains("pornhubpremium.com", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? _cachedYtDlpVersion;
+    private static string YtDlpVersion(string ytdlpPath)
+    {
+        if (_cachedYtDlpVersion != null) return _cachedYtDlpVersion;
+        try
+        {
+            using var proc = Process.Start(new ProcessStartInfo
+            {
+                FileName = ytdlpPath,
+                Arguments = "--version",
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            });
+            string output = proc?.StandardOutput.ReadToEnd().Trim() ?? "";
+            proc?.WaitForExit(15000);
+            _cachedYtDlpVersion = string.IsNullOrEmpty(output) ? "unknown" : output;
+        }
+        catch
+        {
+            _cachedYtDlpVersion = "unknown";
+        }
+        return _cachedYtDlpVersion;
+    }
+
+    /// <summary>Append-only diagnostics for streaming downloads (attempts, yt-dlp errors).</summary>
+    private static void LogDiag(DownloadItem item, string message)
+    {
+        try
+        {
+            File.AppendAllText(PortablePaths.StartupLogPath,
+                $"[{DateTime.Now}] [dl:{item.Id[..8]}:{item.Title}] {message}\n");
+        }
+        catch { }
     }
 
     private static async Task<string> EnsurePlayableMediaFileAsync(string downloadsFolder, string safeTitle, string expectedExt, string knownPath, CancellationToken cancellationToken = default)

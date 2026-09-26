@@ -543,6 +543,7 @@ public sealed partial class MainWindow : Window
                 item.Status = DownloadStatus.Paused;
                 item.SpeedText = AppLocalization.Get("download.pausedSpeed");
                 item.StatusText = AppLocalization.Get("download.paused");
+                item.EtaText = "--";
             }
         }
 
@@ -979,6 +980,7 @@ public sealed partial class MainWindow : Window
                 item.Status = DownloadStatus.Paused;
                 item.SpeedText = AppLocalization.Get("download.pausedSpeed");
                 item.StatusText = AppLocalization.Get("download.paused");
+                item.EtaText = "--";
                 StatusTextBlock.Text = AppLocalization.Format("main.pausedDownload", item.Title);
             }
             else if (item.Status == DownloadStatus.Paused || item.Status == DownloadStatus.Failed)
@@ -988,6 +990,7 @@ public sealed partial class MainWindow : Window
                 item.Status = DownloadStatus.Queued;
                 item.SpeedText = AppLocalization.Get("download.resuming");
                 item.StatusText = AppLocalization.Get("download.connecting");
+                item.EtaText = "--";
                 StatusTextBlock.Text = AppLocalization.Format("main.resumedDownload", item.Title);
                 QueueDownload(item);
             }

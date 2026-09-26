@@ -400,6 +400,7 @@ public class DownloadEngine
             {
                 item.Progress = 0;
                 item.SavePath = "";
+                item.EtaText = "--";
                 item.SpeedText = AppLocalization.Get("download.resolving");
             }
             firstTry = false;
@@ -426,6 +427,7 @@ public class DownloadEngine
             // aria2c external-downloader lines: [#d896bb 606MiB/612MiB(99%) CN:5 DL:1.4MiB ETA:4s]
             var ariaRegex = new Regex(@"\[#[0-9a-f]+\s+(\S+)/(\S+)\((\d+)%\)", RegexOptions.Compiled);
             var ariaRateRegex = new Regex(@"DL:(\S+)", RegexOptions.Compiled);
+            var ariaEtaRegex = new Regex(@"ETA:(\S+)", RegexOptions.Compiled);
             var destRegex = new Regex(@"\[Merger\] Merging formats into ""([^""]+)""", RegexOptions.Compiled);
             var destDirectRegex = new Regex(@"\[download\] Destination: (.+)", RegexOptions.Compiled);
             var remuxRegex = new Regex(@"\[VideoRemuxer\] Remuxing video from [^ ]+ to ""?([^""]+)""?", RegexOptions.Compiled);
@@ -448,6 +450,8 @@ public class DownloadEngine
                         string aspeed = rm.Success ? rm.Groups[1].Value + "/s" : "";
                         item.Progress = apct;
                         item.SizeText = $"{asize} / {atotal}";
+                        var em = ariaEtaRegex.Match(line);
+                        string aeta = em.Success ? em.Groups[1].Value : "";
                         if (!string.IsNullOrEmpty(aspeed))
                         {
                             item.SpeedText = aspeed;
@@ -457,6 +461,9 @@ public class DownloadEngine
                         {
                             item.StatusText = $"{apct:F1}% of {atotal}";
                         }
+                        item.EtaText = string.IsNullOrEmpty(aeta)
+                            ? "--"
+                            : AppLocalization.Format("download.timeLeft", aeta);
                         return;
                     }
                 }
@@ -468,10 +475,13 @@ public class DownloadEngine
                     }
                     string size = m.Groups[2].Value;
                     string speed = m.Groups[3].Value;
-                    string eta = m.Groups[4].Success ? m.Groups[4].Value : "";
+                    string eta = m.Groups[4].Success ? m.Groups[4].Value.Trim() : "";
 
                     item.SizeText = size;
                     item.SpeedText = speed;
+                    item.EtaText = string.IsNullOrEmpty(eta)
+                        ? "--"
+                        : AppLocalization.Format("download.timeLeft", eta);
                     item.StatusText = string.IsNullOrEmpty(eta)
                         ? AppLocalization.Format("download.progressSpeed", pct, size, speed)
                         : AppLocalization.Format("download.progressEta", pct, size, eta);
@@ -582,6 +592,7 @@ public class DownloadEngine
                 item.Progress = 100;
                 item.Status = DownloadStatus.Completed;
                 item.SpeedText = AppLocalization.Get("download.finished");
+                item.EtaText = "--";
                 if (!string.IsNullOrEmpty(dest) && File.Exists(dest))
                 {
                     item.SavePath = dest;
@@ -601,6 +612,7 @@ public class DownloadEngine
                     item.Status = DownloadStatus.Paused;
                     item.SpeedText = AppLocalization.Get("download.pausedSpeed");
                     item.StatusText = AppLocalization.Get("download.paused");
+                    item.EtaText = "--";
                     break;
                 }
 
@@ -657,11 +669,13 @@ public class DownloadEngine
                     // Next candidate source (e.g. the page re-resolves expired links).
                     item.Progress = 0;
                     item.SavePath = "";
+                    item.EtaText = "--";
                     item.StatusText = AppLocalization.Get("download.retryViaPage");
                     item.SpeedText = AppLocalization.Get("download.resolving");
                     continue;
                 }
                 item.Status = DownloadStatus.Failed;
+                item.EtaText = "--";
                 LogDiag(item, $"terminal failure: {lastError}");
                 if (!string.IsNullOrWhiteSpace(lastError))
                 {
@@ -826,6 +840,17 @@ public class DownloadEngine
                     double speedBytesSec = (totalRead - lastBytes) / (sw.Elapsed.TotalSeconds);
                     item.SpeedText = $"{FormatBytes((long)speedBytesSec)}/s";
                     item.StatusText = AppLocalization.Format("download.transferred", FormatBytes(totalRead), totalStr);
+                    double elapsed = downloadTimer.Elapsed.TotalSeconds;
+                    if (elapsed > 1 && totalRead > 0 && totalBytes.HasValue &&
+                        totalBytes.Value > totalRead)
+                    {
+                        double remaining = (totalBytes.Value - totalRead) / (totalRead / elapsed);
+                        item.EtaText = AppLocalization.Format("download.timeLeft", FormatDuration(remaining));
+                    }
+                    else
+                    {
+                        item.EtaText = "--";
+                    }
                     lastBytes = totalRead;
                     sw.Restart();
                 }
@@ -834,7 +859,7 @@ public class DownloadEngine
             item.Progress = 100;
             item.Status = DownloadStatus.Completed;
             item.SpeedText = AppLocalization.Get("download.finished");
-            await fileStream.DisposeAsync(); // release the lock before moving
+            item.EtaText = "--";
             string dest = MoveFileRobust(tempPath, finalFolder, Path.GetFileName(tempPath));
             try { if (Directory.Exists(partsSubdir)) Directory.Delete(partsSubdir, recursive: true); } catch { }
             item.SavePath = dest;
@@ -846,12 +871,14 @@ public class DownloadEngine
             item.Status = DownloadStatus.Paused;
             item.SpeedText = AppLocalization.Get("download.pausedSpeed");
             item.StatusText = AppLocalization.Get("download.paused");
+            item.EtaText = "--";
             try { if (Directory.Exists(partsSubdir)) Directory.Delete(partsSubdir, recursive: true); } catch { }
         }
         catch (Exception ex)
         {
             item.Status = DownloadStatus.Failed;
             item.StatusText = AppLocalization.Format("download.error", ex.Message);
+            item.EtaText = "--";
             LogDiag(item, $"direct failed: {ex}");
         }
     }
@@ -1031,7 +1058,19 @@ public class DownloadEngine
         if (bytes < 1024) return $"{bytes} B";
         if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
         if (bytes < 1024 * 1024 * 1024) return $"{bytes / (1024.0 * 1024.0):F2} MB";
-        return $"{bytes / (1024.0 * 1024.0 * 1024.0):F2} GB";
+        return $"{bytes / (1024.0 * 1024.0):F2} GB";
+    }
+
+    public static string FormatDuration(double totalSeconds)
+    {
+        if (double.IsNaN(totalSeconds) || double.IsInfinity(totalSeconds) || totalSeconds < 0)
+            return "--";
+        var span = TimeSpan.FromSeconds(totalSeconds);
+        if (span.TotalHours >= 1)
+            return $"{(int)span.TotalHours}h {span.Minutes:D2}m";
+        if (span.TotalMinutes >= 1)
+            return $"{(int)span.TotalMinutes}m {span.Seconds:D2}s";
+        return $"{Math.Max(1, (int)Math.Ceiling(span.TotalSeconds))}s";
     }
 
     private static string FindFfmpegPath()

@@ -23,6 +23,8 @@ public class DownloadItem : INotifyPropertyChanged
     private string _speedText = "0 KB/s";
     private string _sizeText = "--";
     private string _statusText = AppLocalization.Get("download.queued");
+    private string _etaText = "--";
+    private DateTime _createdAt = DateTime.Now;
     private DispatcherQueue? _dispatcherQueue;
 
     public DownloadItem()
@@ -74,7 +76,23 @@ public class DownloadItem : INotifyPropertyChanged
         }
     }
 
-    public DateTime CreatedAt { get; set; } = DateTime.Now;
+    public DateTime CreatedAt
+    {
+        get => _createdAt;
+        set
+        {
+            if (_createdAt != value)
+            {
+                _createdAt = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(AddedText));
+            }
+        }
+    }
+
+    /// <summary>Localized "Added ..." line shown under each download.</summary>
+    public string AddedText =>
+        AppLocalization.Format("download.addedOn", _createdAt);
 
     private System.Threading.CancellationTokenSource _cts = new();
 
@@ -150,6 +168,13 @@ public class DownloadItem : INotifyPropertyChanged
     {
         get => _statusText;
         set { if (_statusText != value) { _statusText = value; OnPropertyChanged(); } }
+    }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string EtaText
+    {
+        get => _etaText;
+        set { if (_etaText != value) { _etaText = value; OnPropertyChanged(); } }
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

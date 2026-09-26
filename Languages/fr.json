@@ -123,6 +123,8 @@
   "download.pausedSpeed": "Suspendu",
   "download.resuming": "Reprise...",
   "download.linkExpired": "Lien expiré (410). Relancez la vidéo dans le navigateur, puis réessayez.",
+  "download.timeLeft": "Reste {0}",
+  "download.addedOn": "Ajouté le {0:g}",
   "settings.appearanceTab": "Apparence",
   "settings.themeHeader": "Mode d’affichage",
   "settings.themeHint": "Suit Windows par défaut. Les changements s’appliquent immédiatement à toutes les fenêtres.",

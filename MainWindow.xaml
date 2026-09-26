@@ -107,8 +107,18 @@
                                 <ProgressBar Grid.Row="1" Value="{x:Bind Progress, Mode=OneWay}" Maximum="100" Margin="0,8,0,6" Height="6" CornerRadius="3" />
 
                                 <Grid Grid.Row="2">
-                                    <TextBlock Text="{x:Bind StatusText, Mode=OneWay}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextTrimming="CharacterEllipsis" />
-                                    <TextBlock Text="{x:Bind SizeText, Mode=OneWay}" HorizontalAlignment="Right" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" Spacing="0" Margin="0,0,8,0">
+                                        <TextBlock Text="{x:Bind StatusText, Mode=OneWay}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Text="{x:Bind AddedText, Mode=OneWay}" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" TextTrimming="CharacterEllipsis" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Spacing="0" HorizontalAlignment="Right">
+                                        <TextBlock Text="{x:Bind SizeText, Mode=OneWay}" HorizontalAlignment="Right" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                                        <TextBlock Text="{x:Bind EtaText, Mode=OneWay}" HorizontalAlignment="Right" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    </StackPanel>
                                 </Grid>
                             </Grid>
 

@@ -53,9 +53,10 @@
         }).catch(() => {});
       }
 
-      // If dropdown is currently open, refresh it live
-      if (currentOpenMenu && currentOpenMenu._video) {
-        refreshOpenDropdown(currentOpenMenu._video, currentOpenMenu._btn);
+  // If dropdown is currently open, refresh it live (debounced: HLS players
+  // emit network events constantly, and each one used to rebuild the menu)
+  if (currentOpenMenu && currentOpenMenu._video) {
+        scheduleDropdownRefresh();
       }
     }
   });
@@ -100,7 +101,7 @@
           pageCapturedStreams.unshift(msg.media);
         }
         if (currentOpenMenu && currentOpenMenu._video) {
-          refreshOpenDropdown(currentOpenMenu._video, currentOpenMenu._btn);
+          scheduleDropdownRefresh();
         }
         return;
       }
@@ -246,7 +247,7 @@
       // Metadata may have arrived after the menu opened: refresh so
       // resolution labels upgrade from temporary to concrete.
       if (currentOpenMenu && currentOpenMenu._video === video) {
-        refreshOpenDropdown(video, currentOpenMenu._btn);
+        scheduleDropdownRefresh();
       }
     });
     sniffVideoSources(video);
@@ -429,7 +430,29 @@
   }
   // ([{ height, width, bandwidth, url }], best first). Returns [] when the
   // playlist can't be fetched/parsed (CORS, media playlist, etc.).
+  // Parsed variant lists are cached briefly: every dropdown refresh used to
+  // re-fetch the (often signed, soon-expiring) master playlist, which both
+  // flashed the menu and raced expiry. Only non-empty results are cached.
+  const playlistVariantsCache = new Map(); // url -> { time, variants }
+  const VARIANTS_TTL_MS = 60000;
+  function getCachedVariants(url) {
+    try {
+      const entry = playlistVariantsCache.get(url);
+      if (entry && (Date.now() - entry.time < VARIANTS_TTL_MS)) return entry.variants;
+    } catch (e) {}
+    return null;
+  }
+  function setCachedVariants(url, variants) {
+    try {
+      if (url && variants && variants.length > 0) {
+        if (playlistVariantsCache.size > 50) playlistVariantsCache.clear();
+        playlistVariantsCache.set(url, { time: Date.now(), variants });
+      }
+    } catch (e) {}
+  }
   async function getHlsVariants(masterUrl) {
+    const cached = getCachedVariants(masterUrl);
+    if (cached) return cached;
     try {
       const res = await fetch(masterUrl, { credentials: "omit" });
       if (!res.ok) return [];
@@ -467,15 +490,19 @@
           byHeight.set(v.height, v);
         }
       });
-      return Array.from(byHeight.values())
+      const deduped = Array.from(byHeight.values())
         .sort((a, b) => b.height - a.height)
         .slice(0, 6);
+      setCachedVariants(masterUrl, deduped);
+      return deduped;
     } catch (e) {
       return [];
     }
   }
 
   async function getDashVariants(manifestUrl) {
+    const cachedDash = getCachedVariants(manifestUrl);
+    if (cachedDash) return cachedDash;
     try {
       const response = await fetch(manifestUrl, { credentials: "omit" });
       if (!response.ok) return [];
@@ -497,9 +524,11 @@
         const previous = byHeight.get(variant.height);
         if (!previous || previous.bandwidth < variant.bandwidth) byHeight.set(variant.height, variant);
       });
-      return Array.from(byHeight.values())
+      const dedupedDash = Array.from(byHeight.values())
         .sort((a, b) => b.height - a.height)
         .slice(0, 6);
+      setCachedVariants(manifestUrl, dedupedDash);
+      return dedupedDash;
     } catch (e) {
       return [];
     }
@@ -955,9 +984,27 @@
 
   async function refreshOpenDropdown(video, btn) {
     if (!currentOpenMenu) return;
-    const header = currentOpenMenu.querySelector(".wrench-dropdown-header");
-    currentOpenMenu.querySelectorAll(".wrench-dropdown-item, .wrench-dropdown-empty").forEach((e) => e.remove());
     await populateDropdownItems(currentOpenMenu, video, btn);
+  }
+
+  // Coalesce bursts of capture/metadata events into one refresh. Without
+  // this, every HLS segment request rebuilds the open menu (visible flash).
+  let refreshTimer = null;
+  function scheduleDropdownRefresh() {
+    if (!currentOpenMenu) return;
+    if (refreshTimer) return; // one pending refresh is enough
+    refreshTimer = setTimeout(() => {
+      refreshTimer = null;
+      if (currentOpenMenu && currentOpenMenu._video) {
+        refreshOpenDropdown(currentOpenMenu._video, currentOpenMenu._btn);
+      }
+    }, 700);
+  }
+
+  function dropdownItemsSignature(items) {
+    return (items || []).map((i) =>
+      `${i.displayName || i.title || ""}|${i.badge || ""}|${i.url || ""}|${i.sub || ""}`
+    ).join("\n");
   }
 
   async function populateDropdownItems(menu, video, btn) {
@@ -973,6 +1020,11 @@
       }
       items = await getGenericVideoItems(video, bgMedia);
       if (menu._populateGeneration !== generation) return;
+
+      // Diff-render: identical list => don't touch the DOM at all (no flash).
+      const sig = dropdownItemsSignature(items);
+      if (menu._itemsSignature === sig) return;
+      menu.querySelectorAll(".wrench-dropdown-item, .wrench-dropdown-empty").forEach((e) => e.remove());
 
       if (items.length === 0) {
         const empty = document.createElement("div");
@@ -1027,8 +1079,10 @@
           menu.appendChild(itemEl);
         });
       }
+      menu._itemsSignature = sig;
     } catch (err) {
       if (menu._populateGeneration !== generation) return;
+      menu.querySelectorAll(".wrench-dropdown-item, .wrench-dropdown-empty").forEach((e) => e.remove());
       const empty = document.createElement("div");
       empty.className = "wrench-dropdown-empty";
       empty.textContent = "Error loading streams: " + err.message;

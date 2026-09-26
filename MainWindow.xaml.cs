@@ -26,6 +26,7 @@ public sealed partial class MainWindow : Window
     private readonly Dictionary<string, int> _retryCounts = new(StringComparer.Ordinal);
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _taskbarTimer;
     private IntPtr _taskbarHwnd = IntPtr.Zero;
+    private string _baseTitle = "Wrench Downloader";
 #if !DEBUG
     private TrayIconHelper? _trayIcon;
     private bool _isExplicitExit;
@@ -130,14 +131,17 @@ public sealed partial class MainWindow : Window
                 TaskbarProgress.Update(_taskbarHwnd, (ulong)(avg * 10), 1000,
                     paused ? TaskbarProgress.TaskbarState.Paused
                            : TaskbarProgress.TaskbarState.Normal);
+                try { Title = $"{_baseTitle} — {avg:F0}%"; } catch { }
             }
             else if (Downloads.Any(d => d.Status == DownloadStatus.Failed))
             {
                 TaskbarProgress.Update(_taskbarHwnd, 1000, 1000, TaskbarProgress.TaskbarState.Error);
+                try { Title = _baseTitle; } catch { }
             }
             else
             {
                 TaskbarProgress.Reset(_taskbarHwnd);
+                try { Title = _baseTitle; } catch { }
             }
         }
         catch { }
@@ -884,7 +888,8 @@ public sealed partial class MainWindow : Window
 
     private void ApplyLocalization()
     {
-        Title = $"{AppLocalization.Get("app.title")} 26.2.1";
+        _baseTitle = $"{AppLocalization.Get("app.title")} 26.2.1";
+        Title = _baseTitle;
         if (Content is FrameworkElement root)
             root.FlowDirection = AppLocalization.IsRightToLeft ? FlowDirection.RightToLeft : FlowDirection.LeftToRight;
 

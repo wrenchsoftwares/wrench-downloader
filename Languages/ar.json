@@ -80,7 +80,7 @@
   "settings.behaviorTab": "السلوك",
   "settings.languageTab": "اللغة",
   "settings.downloadLocation": "موقع التنزيل",
-  "settings.parallelFragments": "الأجزاء المتوازية لكل تنزيل",
+  "settings.parallelFragments": "الاتصالات المتوازية لكل تنزيل (الأجزاء + الاتصالات المتعددة)",
   "settings.maximumDownloads": "الحد الأقصى للتنزيلات النشطة",
   "settings.maximumRate": "السرعة القصوى للتنزيل (ك.بايت/ث؛ 0 = بلا حد)",
   "settings.clipboardMonitor": "مراقبة الحافظة لروابط التنزيل وطلب التأكيد قبل إضافتها",

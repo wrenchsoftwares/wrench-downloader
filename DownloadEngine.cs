@@ -214,6 +214,23 @@ public class DownloadEngine
         if (File.Exists(pythonYtDlp)) ytdlpPath = pythonYtDlp;
         LogDiag(item, $"start quality={item.Quality} ytdlp={ytdlpPath} version={YtDlpVersion(ytdlpPath)}");
 
+        // Multi-connection plain-HTTP downloads (IDM-style). HLS/DASH stay on
+        // yt-dlp's native downloader (--concurrent-fragments); aria2c only
+        // handles generic http(s), so passing it globally is safe.
+        string? aria2cPath = null;
+        try
+        {
+            aria2cPath = Aria2cHelper.FindAria2c();
+            if (aria2cPath == null)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try { await Aria2cHelper.EnsureAria2cAsync(); } catch { }
+                });
+            }
+        }
+        catch { aria2cPath = null; }
+
         var argsBuilder = new StringBuilder();
         // IDM-style parallel segment download flags with robust retry & timeout settings to ensure it completes
         argsBuilder.Append(item.DownloadPlaylist ? "--yes-playlist " : "--no-playlist ");
@@ -225,6 +242,21 @@ public class DownloadEngine
         }
         // Maximize network buffer & chunking to avoid server-side rate-limiting and maximize throughput
         argsBuilder.Append("--buffer-size 64K --http-chunk-size 10M --throttled-rate 100K ");
+
+        // aria2c multi-connection for direct files (single-connection CDNs
+        // throttle to ~500KB/s; 8 connections reach IDM-class ~2MB/s).
+        // Kept OUT of commonArgs: if a strict host rejects aria2c, the same
+        // URL is retried natively without rebuilding the plan.
+        string ariaSuffix = "";
+        try
+        {
+            ariaSuffix = Aria2cHelper.BuildDownloaderArgs(aria2cPath,
+                SettingsHelper.ConcurrentFragments, SettingsHelper.MaximumDownloadRateKBps);
+            if (!string.IsNullOrEmpty(ariaSuffix))
+                LogDiag(item, $"aria2c enabled: {ariaSuffix.Trim()}");
+        }
+        catch { ariaSuffix = ""; }
+        bool ariaActive = !string.IsNullOrEmpty(ariaSuffix);
 
         // Some pages obfuscate high-quality stream URLs with JavaScript.
         // Without a JS runtime yt-dlp fails with "PhantomJS not found". Use node/deno when available.
@@ -363,7 +395,7 @@ public class DownloadEngine
         {
             var attempt = pendingUrls.Peek();
             string attemptUrl = attempt.Url;
-            string attemptArgs = commonArgs + (attempt.CookieArgs ?? "");
+            string attemptArgs = commonArgs + (attempt.CookieArgs ?? "") + (ariaActive ? ariaSuffix : "");
             if (!firstTry)
             {
                 item.Progress = 0;
@@ -381,6 +413,7 @@ public class DownloadEngine
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
+            Aria2cHelper.ConfigureEnvironment(psi, aria2cPath);
 
         try
         {
@@ -390,6 +423,9 @@ public class DownloadEngine
             
             // Regexes for parsing yt-dlp progress (handling ~ in HLS estimates and ETA)
             var progressRegex = new Regex(@"\[download\]\s+([\d\.]+)%\s+of\s+(?:~?\s*)([^\s]+)\s+at\s+([^\s]+)(?:\s+ETA\s+([^\s]+))?", RegexOptions.Compiled);
+            // aria2c external-downloader lines: [#d896bb 606MiB/612MiB(99%) CN:5 DL:1.4MiB ETA:4s]
+            var ariaRegex = new Regex(@"\[#[0-9a-f]+\s+(\S+)/(\S+)\((\d+)%\)", RegexOptions.Compiled);
+            var ariaRateRegex = new Regex(@"DL:(\S+)", RegexOptions.Compiled);
             var destRegex = new Regex(@"\[Merger\] Merging formats into ""([^""]+)""", RegexOptions.Compiled);
             var destDirectRegex = new Regex(@"\[download\] Destination: (.+)", RegexOptions.Compiled);
             var remuxRegex = new Regex(@"\[VideoRemuxer\] Remuxing video from [^ ]+ to ""?([^""]+)""?", RegexOptions.Compiled);
@@ -400,6 +436,30 @@ public class DownloadEngine
                 string line = e.Data.Trim();
 
                 var m = progressRegex.Match(line);
+                if (!m.Success)
+                {
+                    var am = ariaRegex.Match(line);
+                    if (am.Success &&
+                        double.TryParse(am.Groups[3].Value, out double apct))
+                    {
+                        string asize = am.Groups[1].Value;
+                        string atotal = am.Groups[2].Value;
+                        var rm = ariaRateRegex.Match(line);
+                        string aspeed = rm.Success ? rm.Groups[1].Value + "/s" : "";
+                        item.Progress = apct;
+                        item.SizeText = $"{asize} / {atotal}";
+                        if (!string.IsNullOrEmpty(aspeed))
+                        {
+                            item.SpeedText = aspeed;
+                            item.StatusText = AppLocalization.Format("download.progressSpeed", apct, atotal, aspeed);
+                        }
+                        else
+                        {
+                            item.StatusText = $"{apct:F1}% of {atotal}";
+                        }
+                        return;
+                    }
+                }
                 if (m.Success)
                 {
                     if (double.TryParse(m.Groups[1].Value, out double pct))
@@ -553,6 +613,21 @@ public class DownloadEngine
                         .ToList();
                     pendingUrls.Clear();
                     foreach (var p in remaining) pendingUrls.Enqueue(p);
+                }
+
+                // Host rejected the aria2c burst (e.g. HTTP 503 on every
+                // connection): fall back to the native single-connection
+                // downloader for the same URL instead of failing outright.
+                if (ariaActive && lastError.Contains("aria2c", StringComparison.OrdinalIgnoreCase))
+                {
+                    ariaActive = false;
+                    sameUrlRetries = 0;
+                    LogDiag(item, "aria2c rejected, retrying natively");
+                    item.Progress = 0;
+                    item.SavePath = "";
+                    item.StatusText = AppLocalization.Get("download.resolving");
+                    item.SpeedText = AppLocalization.Get("download.resolving");
+                    continue;
                 }
 
                 bool linkExpired = lastError.Contains("410", StringComparison.OrdinalIgnoreCase) &&

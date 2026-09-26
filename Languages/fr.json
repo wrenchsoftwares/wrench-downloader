@@ -80,7 +80,7 @@
   "settings.behaviorTab": "Comportement",
   "settings.languageTab": "Langue",
   "settings.downloadLocation": "Emplacement des téléchargements",
-  "settings.parallelFragments": "Fragments parallèles par téléchargement",
+  "settings.parallelFragments": "Connexions parallèles par téléchargement (fragments + multi-connexions)",
   "settings.maximumDownloads": "Nombre maximal de téléchargements actifs",
   "settings.maximumRate": "Vitesse maximale (Ko/s ; 0 = illimitée)",
   "settings.clipboardMonitor": "Surveiller le presse-papiers et demander avant d’ajouter un lien",

@@ -80,7 +80,7 @@
   "settings.behaviorTab": "Behavior",
   "settings.languageTab": "Language",
   "settings.downloadLocation": "Download location",
-  "settings.parallelFragments": "Parallel fragments per download",
+  "settings.parallelFragments": "Parallel connections per download (fragments + multi-connection)",
   "settings.maximumDownloads": "Maximum active downloads",
   "settings.maximumRate": "Maximum download speed (KB/s; 0 = unlimited)",
   "settings.clipboardMonitor": "Monitor clipboard for download links and ask before adding",

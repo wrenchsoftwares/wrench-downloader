@@ -100,6 +100,10 @@ public sealed partial class MainWindow : Window
         _bridgeServer.Start();
         UpdateClipboardMonitoring();
 
+        // Prefetch the aria2c multi-connection engine in the background so
+        // direct downloads run at full speed from the first download on.
+        _ = Task.Run(async () => { try { await Aria2cHelper.EnsureAria2cAsync(); } catch { } });
+
         _downloadQueueTimer = DispatcherQueue.CreateTimer();
         _downloadQueueTimer.Interval = TimeSpan.FromSeconds(10);
         _downloadQueueTimer.Tick += (_, _) => PumpDownloadQueue();

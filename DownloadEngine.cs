@@ -48,6 +48,7 @@ public class DownloadEngine
         }
 
         if (!Directory.Exists(downloadsFolder)) Directory.CreateDirectory(downloadsFolder);
+        CleanupStalePartsOnce();
 
         // Check if the URL needs stream demuxing (page or manifest) vs direct fetch.
         if (IsStreamingSite(item))
@@ -192,30 +193,19 @@ public class DownloadEngine
 
         string ext = isAudio ? "mp3" : "mp4";
 
-        if (!isGenericTitle)
-        {
-            // If file already exists with same name, increment number: "Title (1)", "Title (2)", etc.
-            string baseSafeTitle = safeTitle;
-            int count = 1;
-            while (File.Exists(Path.Combine(downloadsFolder, $"{safeTitle}.{ext}")) ||
-                   File.Exists(Path.Combine(downloadsFolder, $"{safeTitle}.mp4")) ||
-                   File.Exists(Path.Combine(downloadsFolder, $"{safeTitle}.mkv")) ||
-                   File.Exists(Path.Combine(downloadsFolder, $"{safeTitle}.webm")) ||
-                   File.Exists(Path.Combine(downloadsFolder, $"{safeTitle}.mp3")))
-            {
-                safeTitle = $"{baseSafeTitle} ({count++})";
-            }
-        }
+        // Isolated scratch space: yt-dlp writes EVERYTHING here (fragments,
+        // .part, merges). Collision numbering happens at move time, when the
+        // finished file lands in the real downloads folder.
+        string partsSubdir = CreatePartsSubdir(safeTitle);
 
         // If title is generic or from a webpage script, let yt-dlp determine the real video title!
         // %(autonumber)s or yt-dlp template can be used, and after download completion we also ensure collision number.
         string outputTemplate = item.DownloadPlaylist
-            ? Path.Combine(downloadsFolder, "%(playlist_title)s", "%(playlist_index)03d - %(title)s.%(ext)s")
+            ? Path.Combine(partsSubdir, "%(playlist_title)s", "%(playlist_index)03d - %(title)s.%(ext)s")
             : isGenericTitle
-                ? Path.Combine(downloadsFolder, "%(title)s.%(ext)s")
-                : Path.Combine(downloadsFolder, $"{safeTitle}.%(ext)s");
-        string temporaryFolder = PortablePaths.DownloadPartsDirectory;
-        Directory.CreateDirectory(temporaryFolder);
+                ? Path.Combine(partsSubdir, "%(title)s.%(ext)s")
+                : Path.Combine(partsSubdir, $"{safeTitle}.%(ext)s");
+        string temporaryFolder = partsSubdir;
 
         // Locate yt-dlp.exe
         string ytdlpPath = "yt-dlp";
@@ -507,17 +497,34 @@ public class DownloadEngine
 
             await proc.WaitForExitAsync(cancellationToken);
 
-            string finalFile = await EnsurePlayableMediaFileAsync(downloadsFolder, safeTitle, ext, item.SavePath, cancellationToken);
+            string finalFile = await EnsurePlayableMediaFileAsync(partsSubdir, safeTitle, ext, item.SavePath, cancellationToken);
 
             if (proc.ExitCode == 0 || (!string.IsNullOrEmpty(finalFile) && File.Exists(finalFile) && new FileInfo(finalFile).Length > 1024 * 1024))
             {
+                // Finished media leaves the scratch folder for the real
+                // downloads folder (with collision numbering); transients die here.
+                var moved = MoveFinishedMediaToDownloads(partsSubdir, downloadsFolder);
+                try { if (Directory.Exists(partsSubdir)) Directory.Delete(partsSubdir, recursive: true); } catch { }
+                string dest = "";
+                if (!string.IsNullOrEmpty(finalFile))
+                {
+                    var match = moved.FirstOrDefault(m => m.Source.Equals(finalFile, StringComparison.OrdinalIgnoreCase));
+                    dest = match.Dest ?? moved.FirstOrDefault().Dest ?? "";
+                }
+                else
+                {
+                    dest = moved.FirstOrDefault().Dest ?? "";
+                }
+                LogDiag(item, string.IsNullOrEmpty(dest)
+                    ? "completed but no media file found to move"
+                    : $"moved to downloads: {dest}");
                 item.Progress = 100;
                 item.Status = DownloadStatus.Completed;
                 item.SpeedText = AppLocalization.Get("download.finished");
-                if (!string.IsNullOrEmpty(finalFile))
+                if (!string.IsNullOrEmpty(dest) && File.Exists(dest))
                 {
-                    item.SavePath = finalFile;
-                    string currentName = Path.GetFileNameWithoutExtension(finalFile);
+                    item.SavePath = dest;
+                    string currentName = Path.GetFileNameWithoutExtension(dest);
                     if (isGenericTitle)
                     {
                         item.Title = currentName;
@@ -622,6 +629,7 @@ public class DownloadEngine
 
     private static async Task DownloadDirectHttpAsync(DownloadItem item, string downloadsFolder, CancellationToken cancellationToken)
     {
+        string partsSubdir = "";
         try
         {
             item.Status = DownloadStatus.Downloading;
@@ -694,14 +702,17 @@ public class DownloadEngine
                 safeTitle = safeTitle[..^rawExt.Length].TrimEnd();
             }
 
-            // If a specific custom SavePath folder was already chosen in prompt dialog
-            string targetFolder = !string.IsNullOrEmpty(item.SavePath) && Directory.Exists(Path.GetDirectoryName(item.SavePath))
+            // Final home (prompt-chosen folder or downloads). The bytes land in
+            // an isolated Parts subfolder first; only finished files move here.
+            string finalFolder = !string.IsNullOrEmpty(item.SavePath) && Directory.Exists(Path.GetDirectoryName(item.SavePath))
                 ? Path.GetDirectoryName(item.SavePath)!
                 : downloadsFolder;
 
-            // Avoid collision: file (1).ext, file (2).ext
-            item.SavePath = GetUniqueFilePath(targetFolder, safeTitle, rawExt);
-            item.Title = Path.GetFileName(item.SavePath);
+            partsSubdir = CreatePartsSubdir(safeTitle);
+            string tempPath = Path.Combine(partsSubdir, SanitizeFileName(
+                string.IsNullOrWhiteSpace(safeTitle) ? "download" : safeTitle) + rawExt);
+            item.SavePath = tempPath;
+            item.Title = Path.GetFileName(tempPath);
 
             // High-speed 512KB buffer for maximum I/O throughput
             const int bufferSize = 524288;
@@ -747,6 +758,11 @@ public class DownloadEngine
             item.Progress = 100;
             item.Status = DownloadStatus.Completed;
             item.SpeedText = AppLocalization.Get("download.finished");
+            await fileStream.DisposeAsync(); // release the lock before moving
+            string dest = MoveFileRobust(tempPath, finalFolder, Path.GetFileName(tempPath));
+            try { if (Directory.Exists(partsSubdir)) Directory.Delete(partsSubdir, recursive: true); } catch { }
+            item.SavePath = dest;
+            item.Title = Path.GetFileName(dest);
             item.StatusText = AppLocalization.Format("download.saved", Path.GetFileName(item.SavePath));
         }
         catch (OperationCanceledException)
@@ -754,11 +770,13 @@ public class DownloadEngine
             item.Status = DownloadStatus.Paused;
             item.SpeedText = AppLocalization.Get("download.pausedSpeed");
             item.StatusText = AppLocalization.Get("download.paused");
+            try { if (Directory.Exists(partsSubdir)) Directory.Delete(partsSubdir, recursive: true); } catch { }
         }
         catch (Exception ex)
         {
             item.Status = DownloadStatus.Failed;
             item.StatusText = AppLocalization.Format("download.error", ex.Message);
+            LogDiag(item, $"direct failed: {ex}");
         }
     }
 
@@ -787,6 +805,118 @@ public class DownloadEngine
             if (!File.Exists(target)) return target;
             num++;
         }
+    }
+
+    private static readonly string[] FinishedMediaExtensions =
+        [".mp4", ".mkv", ".webm", ".mov", ".avi", ".ts", ".mp3", ".m4a", ".flac", ".ogg", ".wav"];
+
+    /// <summary>
+    /// Isolated scratch folder for one download. EVERYTHING transient
+    /// (.part, .ytdl, fragments, merges) lives here so the user's Downloads
+    /// folder only ever receives finished files.
+    /// </summary>
+    public static string CreatePartsSubdir(string baseName)
+    {
+        string root = PortablePaths.DownloadPartsDirectory;
+        Directory.CreateDirectory(root);
+        string safe = SanitizeFileName(baseName ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(safe)) safe = "download";
+        if (safe.Length > 50) safe = safe[..50].Trim();
+        string dir = Path.Combine(root, $"{safe}-{Guid.NewGuid():N}"[..Math.Min(70, safe.Length + 33)]);
+        int n = 1;
+        while (Directory.Exists(dir)) dir = Path.Combine(root, $"{safe}-{Guid.NewGuid():N}"[..Math.Min(70, safe.Length + 33)] + $"({n++})");
+        Directory.CreateDirectory(dir);
+        return dir;
+    }
+
+    /// <summary>Move that also works across volumes (copy + delete fallback).</summary>
+    public static string MoveFileRobust(string source, string destDir, string fileName)
+    {
+        Directory.CreateDirectory(destDir);
+        string dest = GetUniqueFilePath(destDir,
+            Path.GetFileNameWithoutExtension(fileName), Path.GetExtension(fileName));
+        try
+        {
+            File.Move(source, dest);
+        }
+        catch (IOException)
+        {
+            File.Copy(source, dest, overwrite: false);
+            try { File.Delete(source); } catch { }
+        }
+        return dest;
+    }
+
+    /// <summary>
+    /// Move every finished media file from a Parts subfolder to the downloads
+    /// folder (preserving playlist subfolders), with collision numbering.
+    /// Returns source-&gt;destination pairs.
+    /// </summary>
+    public static List<(string Source, string Dest)> MoveFinishedMediaToDownloads(
+        string partsSubdir, string downloadsFolder)
+    {
+        var moved = new List<(string Source, string Dest)>();
+        if (!Directory.Exists(partsSubdir)) return moved;
+        foreach (string source in Directory.EnumerateFiles(partsSubdir, "*", SearchOption.AllDirectories))
+        {
+            string name = Path.GetFileName(source);
+            if (name.EndsWith(".part", StringComparison.OrdinalIgnoreCase) ||
+                name.EndsWith(".ytdl", StringComparison.OrdinalIgnoreCase) ||
+                name.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase) ||
+                name.EndsWith(".temp", StringComparison.OrdinalIgnoreCase) ||
+                name.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (!FinishedMediaExtensions.Contains(Path.GetExtension(source), StringComparer.OrdinalIgnoreCase))
+                continue;
+            string relative = Path.GetRelativePath(partsSubdir, Path.GetDirectoryName(source)!);
+            string destDir = relative == "." ? downloadsFolder : Path.Combine(downloadsFolder, relative);
+            try
+            {
+                string dest = MoveFileRobust(source, destDir, name);
+                moved.Add((source, dest));
+            }
+            catch { }
+        }
+        return moved;
+    }
+
+    private static bool _partsCleanupDone;
+    private static void CleanupStalePartsOnce()
+    {
+        if (_partsCleanupDone) return;
+        _partsCleanupDone = true;
+        try
+        {
+            Task.Run(() =>
+            {
+                try
+                {
+                    string root = PortablePaths.DownloadPartsDirectory;
+                    if (!Directory.Exists(root)) return;
+                    var cutoff = DateTime.Now.AddDays(-7);
+                    foreach (string file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+                    {
+                        string lower = file.ToLowerInvariant();
+                        if (!(lower.EndsWith(".part") || lower.EndsWith(".ytdl") ||
+                              lower.EndsWith(".tmp") || lower.EndsWith(".temp")))
+                            continue;
+                        try { if (File.GetLastWriteTime(file) < cutoff) File.Delete(file); } catch { }
+                    }
+                    foreach (string dir in Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories)
+                                 .OrderByDescending(d => d.Length))
+                    {
+                        try
+                        {
+                            if (!Directory.EnumerateFileSystemEntries(dir).Any())
+                                Directory.Delete(dir);
+                        }
+                        catch { }
+                    }
+                }
+                catch { }
+            });
+        }
+        catch { }
     }
 
     public static string FormatBytes(long bytes)
@@ -888,7 +1018,7 @@ public class DownloadEngine
         catch { }
     }
 
-    private static async Task<string> EnsurePlayableMediaFileAsync(string downloadsFolder, string safeTitle, string expectedExt, string knownPath, CancellationToken cancellationToken = default)
+    private static async Task<string> EnsurePlayableMediaFileAsync(string searchDir, string safeTitle, string expectedExt, string knownPath, CancellationToken cancellationToken = default)
     {
         return await Task.Run(async () =>
         {
@@ -899,10 +1029,10 @@ public class DownloadEngine
             }
             else
             {
-                exactPath = Path.Combine(downloadsFolder, $"{safeTitle}.{expectedExt}");
+                exactPath = Path.Combine(searchDir, $"{safeTitle}.{expectedExt}");
                 if (!File.Exists(exactPath))
                 {
-                    var candidates = Directory.GetFiles(downloadsFolder, $"{safeTitle}.*");
+                    var candidates = Directory.GetFiles(searchDir, $"{safeTitle}.*");
                     if (candidates.Length > 0)
                     {
                         var nonPart = candidates.FirstOrDefault(c => !c.EndsWith(".part") && !c.EndsWith(".ytdl"));
@@ -928,7 +1058,7 @@ public class DownloadEngine
 
                         // Try remuxing to true ISO MP4 container using ffmpeg
                         string ffmpegPath = FindFfmpegPath();
-                        string tempMp4 = Path.Combine(PortablePaths.DownloadPartsDirectory, $"{safeTitle}_true.mp4");
+                        string tempMp4 = Path.Combine(searchDir, $"{safeTitle}_true.mp4");
                         try
                         {
                             var psi = new ProcessStartInfo
@@ -954,7 +1084,7 @@ public class DownloadEngine
 
                         // If remux failed or ffmpeg not present, rename to .ts
                         // MPEG-TS files play natively in all Windows media players and VLC without error!
-                        string tsPath = Path.Combine(downloadsFolder, $"{safeTitle}.ts");
+                        string tsPath = Path.Combine(searchDir, $"{safeTitle}.ts");
                         if (File.Exists(tsPath)) File.Delete(tsPath);
                         File.Move(exactPath, tsPath);
                         return tsPath;

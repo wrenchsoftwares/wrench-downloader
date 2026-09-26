@@ -16,13 +16,13 @@ public enum DownloadStatus
 
 public class DownloadItem : INotifyPropertyChanged
 {
-    private string _title = "Download";
+    private string _title = AppLocalization.Get("common.download");
     private string _savePath = "";
     private double _progress;
     private DownloadStatus _status;
     private string _speedText = "0 KB/s";
     private string _sizeText = "--";
-    private string _statusText = "Queued";
+    private string _statusText = AppLocalization.Get("download.queued");
     private DispatcherQueue? _dispatcherQueue;
 
     public DownloadItem()
@@ -55,6 +55,11 @@ public class DownloadItem : INotifyPropertyChanged
     public string PageUrl { get; set; } = "";
     public string Referrer { get; set; } = "";
     public string UserAgent { get; set; } = "";
+    public string TargetFolder { get; set; } = "";
+    public string QueueName { get; set; } = "Main queue";
+    public bool DownloadPlaylist { get; set; }
+    public bool WaitForQueueStart { get; set; }
+    public DateTimeOffset? ScheduledAt { get; set; }
 
     public string SavePath
     {
@@ -125,7 +130,9 @@ public class DownloadItem : INotifyPropertyChanged
     public string ActionGlyph => IsActive ? "\uE769" : "\uE768"; // E769 = Pause, E768 = Play
 
     [System.Text.Json.Serialization.JsonIgnore]
-    public string ActionToolTip => IsActive ? "Pause Download" : "Resume Download";
+    public string ActionToolTip => IsActive
+        ? AppLocalization.Get("menu.pauseDownload")
+        : AppLocalization.Get("menu.resumeDownload");
 
     public string SpeedText
     {

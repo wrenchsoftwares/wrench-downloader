@@ -48,6 +48,20 @@ dotnet run --project WrenchDownloader.csproj
 - **Bridge Port**: `127.0.0.1:45732` (HTTP server for Chrome extension).
 - **History File**: `%LOCALAPPDATA%\WrenchDownloader\history.json`.
 
+### Mandatory: clean `obj/` after XAML named-element changes
+Whenever a `.xaml` edit adds, removes, or renames an `x:Name` element or an event
+handler (e.g. `Click="OnFoo"`), Visual Studio's incremental build keeps serving the
+stale generated file under `obj\x64\Debug\*.g.cs`, producing bogus `CS1061`
+errors in the Error List even though the sources are correct. The CLI `dotnet build`
+uses a different intermediate dir and will NOT surface this. Therefore, after every
+such XAML change, always run BEFORE reporting success:
+
+```powershell
+Remove-Item -LiteralPath "obj" -Recurse -Force; if ($?) { dotnet build WrenchDownloader.csproj -c Debug }
+```
+
+Never finish a XAML-editing task on a plain incremental build alone.
+
 ---
 
 ## 3. Chrome Extension Development Runbook

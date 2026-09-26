@@ -16,14 +16,14 @@
     -->
     <Grid Padding="24">
         <StackPanel Spacing="16" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="500">
-            <TextBlock Text="🔧 Wrench Downloader" FontSize="28" FontWeight="Bold" HorizontalAlignment="Center" />
-            <TextBlock Text="High-speed multi-part file and video grabber" Foreground="{ThemeResource TextFillColorSecondaryBrush}" HorizontalAlignment="Center" />
+            <TextBlock x:Name="PageTitleTextBlock" Text="🔧 Wrench Downloader" FontSize="28" FontWeight="Bold" HorizontalAlignment="Center" />
+            <TextBlock x:Name="SubtitleTextBlock" Text="High-speed multi-part file and video grabber" Foreground="{ThemeResource TextFillColorSecondaryBrush}" HorizontalAlignment="Center" />
             
             <TextBox x:Name="UrlTextBox" PlaceholderText="Paste download or video stream URL (e.g. .m3u8, .mp4, direct link)..." />
             
             <StackPanel Orientation="Horizontal" Spacing="10" HorizontalAlignment="Center">
-                <Button Content="Add Download" Style="{ThemeResource AccentButtonStyle}" Click="OnAddDownloadClick" />
-                <Button Content="Grab Video" Click="OnGrabVideoClick" />
+                <Button x:Name="AddDownloadButton" Content="Add Download" Style="{ThemeResource AccentButtonStyle}" Click="OnAddDownloadClick" />
+                <Button x:Name="GrabVideoButton" Content="Grab Video" Click="OnGrabVideoClick" />
             </StackPanel>
 
             <ProgressBar x:Name="TestProgressBar" Value="65" Maximum="100" Margin="0,10,0,0" />

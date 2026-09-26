@@ -28,7 +28,25 @@ public class DownloadEngine
         // Immediately yield so the caller (especially UI thread) returns instantly without blocking
         await Task.Yield();
 
-        string downloadsFolder = SettingsHelper.DownloadFolder;
+        string configuredDownloadFolder = SettingsHelper.DownloadFolder;
+        string downloadsFolder = item.TargetFolder;
+        if (string.IsNullOrWhiteSpace(downloadsFolder) || !Directory.Exists(downloadsFolder))
+        {
+            downloadsFolder = configuredDownloadFolder;
+            if (!string.IsNullOrWhiteSpace(item.SavePath))
+            {
+                string? requestedFolder = Path.GetDirectoryName(item.SavePath);
+                if (!string.IsNullOrWhiteSpace(requestedFolder) && Directory.Exists(requestedFolder))
+                    downloadsFolder = requestedFolder;
+            }
+        }
+
+        if (SettingsHelper.OrganizeDownloadsByType &&
+            Path.GetFullPath(downloadsFolder).Equals(Path.GetFullPath(configuredDownloadFolder), StringComparison.OrdinalIgnoreCase))
+        {
+            downloadsFolder = Path.Combine(downloadsFolder, GetDownloadCategory(item));
+        }
+
         if (!Directory.Exists(downloadsFolder)) Directory.CreateDirectory(downloadsFolder);
 
         // Check if the URL needs stream demuxing (page or manifest) vs direct fetch.
@@ -40,6 +58,27 @@ public class DownloadEngine
         {
             await DownloadDirectHttpAsync(item, downloadsFolder, cancellationToken);
         }
+    }
+
+    private static string GetDownloadCategory(DownloadItem item)
+    {
+        if (item.DownloadPlaylist) return "Playlists";
+        if (string.Equals(item.Quality, "audio", StringComparison.OrdinalIgnoreCase)) return "Audio";
+        if (IsStreamingSite(item)) return "Videos";
+
+        string extension = "";
+        try { extension = Path.GetExtension(new Uri(item.Url).AbsolutePath); } catch { }
+        if (string.IsNullOrEmpty(extension)) extension = Path.GetExtension(item.Title);
+
+        return extension.ToLowerInvariant() switch
+        {
+            ".mp3" or ".m4a" or ".aac" or ".wav" or ".flac" or ".ogg" => "Audio",
+            ".mp4" or ".mkv" or ".webm" or ".mov" or ".avi" or ".ts" => "Videos",
+            ".jpg" or ".jpeg" or ".png" or ".gif" or ".webp" or ".bmp" => "Images",
+            ".pdf" or ".doc" or ".docx" or ".txt" or ".rtf" or ".xls" or ".xlsx" or ".ppt" or ".pptx" => "Documents",
+            ".zip" or ".rar" or ".7z" or ".tar" or ".gz" => "Archives",
+            _ => "Other"
+        };
     }
 
     // No per-site lists anywhere: a URL needs resolving when it structurally
@@ -108,8 +147,8 @@ public class DownloadEngine
                                 item.Url.Contains(".mpd", StringComparison.OrdinalIgnoreCase);
 
         item.Status = DownloadStatus.Downloading;
-        item.StatusText = isDirectManifest ? "Connecting to video stream..." : "Extracting video stream...";
-        item.SpeedText = "Resolving...";
+        item.StatusText = AppLocalization.Get(isDirectManifest ? "download.connectingStream" : "download.extracting");
+        item.SpeedText = AppLocalization.Get("download.resolving");
 
         string safeTitle = SanitizeFileName(item.Title);
         // Clean off quality suffixes if present in item.Title (e.g. "Title - 1080p" -> "Title")
@@ -170,9 +209,13 @@ public class DownloadEngine
 
         // If title is generic or from a webpage script, let yt-dlp determine the real video title!
         // %(autonumber)s or yt-dlp template can be used, and after download completion we also ensure collision number.
-        string outputTemplate = isGenericTitle
-            ? Path.Combine(downloadsFolder, "%(title)s.%(ext)s")
-            : Path.Combine(downloadsFolder, $"{safeTitle}.%(ext)s");
+        string outputTemplate = item.DownloadPlaylist
+            ? Path.Combine(downloadsFolder, "%(playlist_title)s", "%(playlist_index)03d - %(title)s.%(ext)s")
+            : isGenericTitle
+                ? Path.Combine(downloadsFolder, "%(title)s.%(ext)s")
+                : Path.Combine(downloadsFolder, $"{safeTitle}.%(ext)s");
+        string temporaryFolder = PortablePaths.DownloadPartsDirectory;
+        Directory.CreateDirectory(temporaryFolder);
 
         // Locate yt-dlp.exe
         string ytdlpPath = "yt-dlp";
@@ -182,8 +225,13 @@ public class DownloadEngine
 
         var argsBuilder = new StringBuilder();
         // IDM-style parallel segment download flags with robust retry & timeout settings to ensure it completes
-        argsBuilder.Append("--no-playlist --no-warnings --socket-timeout 20 --retries 10 --fragment-retries 20 ");
+        argsBuilder.Append(item.DownloadPlaylist ? "--yes-playlist " : "--no-playlist ");
+        argsBuilder.Append("--no-warnings --socket-timeout 20 --retries 10 --fragment-retries 20 ");
         argsBuilder.Append($"--concurrent-fragments {SettingsHelper.ConcurrentFragments} ");
+        if (SettingsHelper.MaximumDownloadRateKBps > 0)
+        {
+            argsBuilder.Append($"--limit-rate {SettingsHelper.MaximumDownloadRateKBps}K ");
+        }
         // Maximize network buffer & chunking to avoid server-side rate-limiting and maximize throughput
         argsBuilder.Append("--buffer-size 64K --http-chunk-size 10M --throttled-rate 100K ");
 
@@ -250,10 +298,15 @@ public class DownloadEngine
                              item.Url.Contains("/aac/", StringComparison.OrdinalIgnoreCase) ||
                              item.Url.Contains("chunklist", StringComparison.OrdinalIgnoreCase));
 
-        if (isSubOrAudio && !string.IsNullOrWhiteSpace(item.PageUrl))
+        bool isManifestUrl = Regex.IsMatch(item.Url, @"\.(m3u8|mpd)(?:[?#]|$)", RegexOptions.IgnoreCase);
+        if (!string.IsNullOrWhiteSpace(item.PageUrl) &&
+            !item.PageUrl.Equals(item.Url, StringComparison.OrdinalIgnoreCase) &&
+            (item.DownloadPlaylist || isSubOrAudio || isManifestUrl) &&
+            !string.Equals(item.Quality, "audio", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(item.Quality, "file", StringComparison.OrdinalIgnoreCase))
         {
-            // If the captured URL was an isolated audio track or single-track rendition,
-            // prioritize the page URL which resolves the complete presentation with both audio and video!
+            // Resolve the page first so yt-dlp can select the requested quality instead of
+            // being limited to the rendition that happened to be playing in the browser.
             candidateUrls.Add(item.PageUrl);
             if (!string.IsNullOrWhiteSpace(item.Url)) candidateUrls.Add(item.Url);
         }
@@ -279,14 +332,14 @@ public class DownloadEngine
             {
                 item.Progress = 0;
                 item.SavePath = "";
-                item.SpeedText = "Resolving...";
+                item.SpeedText = AppLocalization.Get("download.resolving");
             }
             firstTry = false;
 
             var psi = new ProcessStartInfo
             {
                 FileName = ytdlpPath,
-                Arguments = $"{commonArgs}-o \"{outputTemplate}\" \"{attemptUrl}\"",
+                Arguments = $"{commonArgs}-P \"temp:{temporaryFolder}\" -o \"{outputTemplate}\" \"{attemptUrl}\"",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
@@ -322,11 +375,13 @@ public class DownloadEngine
 
                     item.SizeText = size;
                     item.SpeedText = speed;
-                    item.StatusText = string.IsNullOrEmpty(eta) ? $"{pct:F1}% of {size} ({speed})" : $"{pct:F1}% of {size} (ETA {eta})";
+                    item.StatusText = string.IsNullOrEmpty(eta)
+                        ? AppLocalization.Format("download.progressSpeed", pct, size, speed)
+                        : AppLocalization.Format("download.progressEta", pct, size, eta);
                 }
                 else if (line.Contains("[Merger]"))
                 {
-                    item.StatusText = "Muxing video and audio tracks...";
+                    item.StatusText = AppLocalization.Get("download.muxing");
                     var destMatch = destRegex.Match(line);
                     if (destMatch.Success)
                     {
@@ -351,7 +406,7 @@ public class DownloadEngine
                 }
                 else if (line.Contains("[VideoRemuxer]"))
                 {
-                    item.StatusText = "Remuxing into valid MP4...";
+                    item.StatusText = AppLocalization.Get("download.remuxing");
                     var mRemux = remuxRegex.Match(line);
                     if (mRemux.Success)
                     {
@@ -393,7 +448,7 @@ public class DownloadEngine
             {
                 item.Progress = 100;
                 item.Status = DownloadStatus.Completed;
-                item.SpeedText = "Finished";
+                item.SpeedText = AppLocalization.Get("download.finished");
                 if (!string.IsNullOrEmpty(finalFile))
                 {
                     item.SavePath = finalFile;
@@ -403,7 +458,7 @@ public class DownloadEngine
                         item.Title = currentName;
                     }
                 }
-                item.StatusText = $"Completed! Saved to {Path.GetFileName(item.SavePath)}";
+                item.StatusText = AppLocalization.Format("download.completedSaved", Path.GetFileName(item.SavePath));
                 succeeded = true;
             }
             else
@@ -411,8 +466,8 @@ public class DownloadEngine
                 if (cancellationToken.IsCancellationRequested)
                 {
                     item.Status = DownloadStatus.Paused;
-                    item.SpeedText = "Paused";
-                    item.StatusText = "Paused by user";
+                    item.SpeedText = AppLocalization.Get("download.pausedSpeed");
+                    item.StatusText = AppLocalization.Get("download.paused");
                     break;
                 }
 
@@ -422,8 +477,8 @@ public class DownloadEngine
                 if (rateLimited && sameUrlRetries < 2)
                 {
                     sameUrlRetries++;
-                    item.StatusText = $"Rate limited, retrying ({sameUrlRetries}/2)...";
-                    item.SpeedText = "Waiting...";
+                    item.StatusText = AppLocalization.Format("download.rateLimited", sameUrlRetries);
+                    item.SpeedText = AppLocalization.Get("download.waiting");
                     try { await Task.Delay(5000, cancellationToken); } catch { }
                     continue;
                 }
@@ -434,8 +489,8 @@ public class DownloadEngine
                     // Next candidate source (e.g. the page re-resolves expired links).
                     item.Progress = 0;
                     item.SavePath = "";
-                    item.StatusText = "Stream link failed, retrying via page...";
-                    item.SpeedText = "Resolving...";
+                    item.StatusText = AppLocalization.Get("download.retryViaPage");
+                    item.SpeedText = AppLocalization.Get("download.resolving");
                     continue;
                 }
                 item.Status = DownloadStatus.Failed;
@@ -445,7 +500,7 @@ public class DownloadEngine
                 }
                 else
                 {
-                    item.StatusText = $"Download failed (code {proc.ExitCode})";
+                    item.StatusText = AppLocalization.Format("download.failedCode", proc.ExitCode);
                 }
                 break;
             }
@@ -453,8 +508,8 @@ public class DownloadEngine
         catch (OperationCanceledException)
         {
             item.Status = DownloadStatus.Paused;
-            item.SpeedText = "Paused";
-            item.StatusText = "Paused by user";
+            item.SpeedText = AppLocalization.Get("download.pausedSpeed");
+            item.StatusText = AppLocalization.Get("download.paused");
             break;
         }
         catch (Exception ex)
@@ -462,12 +517,12 @@ public class DownloadEngine
             if (cancellationToken.IsCancellationRequested)
             {
                 item.Status = DownloadStatus.Paused;
-                item.SpeedText = "Paused";
-                item.StatusText = "Paused by user";
+                item.SpeedText = AppLocalization.Get("download.pausedSpeed");
+                item.StatusText = AppLocalization.Get("download.paused");
                 break;
             }
             item.Status = DownloadStatus.Failed;
-            item.StatusText = $"Error: {ex.Message}";
+            item.StatusText = AppLocalization.Format("download.error", ex.Message);
             break;
         }
         }
@@ -478,7 +533,7 @@ public class DownloadEngine
         try
         {
             item.Status = DownloadStatus.Downloading;
-            item.StatusText = "Connecting...";
+            item.StatusText = AppLocalization.Get("download.connecting");
 
             using var response = await _httpClient.GetAsync(item.Url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
             response.EnsureSuccessStatusCode();
@@ -500,7 +555,7 @@ public class DownloadEngine
             }
 
             long? totalBytes = response.Content.Headers.ContentLength;
-            string totalStr = totalBytes.HasValue ? FormatBytes(totalBytes.Value) : "Unknown size";
+            string totalStr = totalBytes.HasValue ? FormatBytes(totalBytes.Value) : AppLocalization.Get("download.unknownSize");
             item.SizeText = totalStr;
 
             // Determine filename and extension from Content-Disposition, URL, or item.Title
@@ -565,12 +620,22 @@ public class DownloadEngine
             long totalRead = 0;
             int bytesRead;
             var sw = Stopwatch.StartNew();
+            var downloadTimer = Stopwatch.StartNew();
             long lastBytes = 0;
 
             while ((bytesRead = await contentStream.ReadAsync(buffer, 0, buffer.Length, cancellationToken)) > 0)
             {
                 await fileStream.WriteAsync(buffer, 0, bytesRead, cancellationToken);
                 totalRead += bytesRead;
+
+                int maximumRateKBps = SettingsHelper.MaximumDownloadRateKBps;
+                if (maximumRateKBps > 0)
+                {
+                    double requiredSeconds = (double)totalRead / (maximumRateKBps * 1024);
+                    double delaySeconds = requiredSeconds - downloadTimer.Elapsed.TotalSeconds;
+                    if (delaySeconds > 0)
+                        await Task.Delay(TimeSpan.FromSeconds(delaySeconds), cancellationToken);
+                }
 
                 if (totalBytes.HasValue && totalBytes.Value > 0)
                 {
@@ -581,7 +646,7 @@ public class DownloadEngine
                 {
                     double speedBytesSec = (totalRead - lastBytes) / (sw.Elapsed.TotalSeconds);
                     item.SpeedText = $"{FormatBytes((long)speedBytesSec)}/s";
-                    item.StatusText = $"{FormatBytes(totalRead)} / {totalStr}";
+                    item.StatusText = AppLocalization.Format("download.transferred", FormatBytes(totalRead), totalStr);
                     lastBytes = totalRead;
                     sw.Restart();
                 }
@@ -589,19 +654,19 @@ public class DownloadEngine
 
             item.Progress = 100;
             item.Status = DownloadStatus.Completed;
-            item.SpeedText = "Finished";
-            item.StatusText = $"Saved to {Path.GetFileName(item.SavePath)}";
+            item.SpeedText = AppLocalization.Get("download.finished");
+            item.StatusText = AppLocalization.Format("download.saved", Path.GetFileName(item.SavePath));
         }
         catch (OperationCanceledException)
         {
             item.Status = DownloadStatus.Paused;
-            item.SpeedText = "Paused";
-            item.StatusText = "Paused by user";
+            item.SpeedText = AppLocalization.Get("download.pausedSpeed");
+            item.StatusText = AppLocalization.Get("download.paused");
         }
         catch (Exception ex)
         {
             item.Status = DownloadStatus.Failed;
-            item.StatusText = $"Error: {ex.Message}";
+            item.StatusText = AppLocalization.Format("download.error", ex.Message);
         }
     }
 
@@ -721,7 +786,7 @@ public class DownloadEngine
 
                         // Try remuxing to true ISO MP4 container using ffmpeg
                         string ffmpegPath = FindFfmpegPath();
-                        string tempMp4 = Path.Combine(downloadsFolder, $"{safeTitle}_true.mp4");
+                        string tempMp4 = Path.Combine(PortablePaths.DownloadPartsDirectory, $"{safeTitle}_true.mp4");
                         try
                         {
                             var psi = new ProcessStartInfo

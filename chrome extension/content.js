@@ -475,6 +475,36 @@
     }
   }
 
+  async function getDashVariants(manifestUrl) {
+    try {
+      const response = await fetch(manifestUrl, { credentials: "omit" });
+      if (!response.ok) return [];
+      const xml = new DOMParser().parseFromString(await response.text(), "application/xml");
+      if (xml.querySelector("parsererror")) return [];
+
+      const representations = Array.from(xml.getElementsByTagNameNS("*", "Representation"));
+      const variants = representations.map(representation => {
+        const height = Number(representation.getAttribute("height")) || 0;
+        const width = Number(representation.getAttribute("width")) || 0;
+        const bandwidth = Number(representation.getAttribute("bandwidth")) || 0;
+        const adaptation = representation.parentElement;
+        const contentType = `${representation.getAttribute("mimeType") || ""} ${adaptation?.getAttribute("mimeType") || ""} ${adaptation?.getAttribute("contentType") || ""}`;
+        return { height, width, bandwidth, contentType };
+      }).filter(variant => variant.height > 0 && /video/i.test(variant.contentType));
+
+      const byHeight = new Map();
+      variants.forEach(variant => {
+        const previous = byHeight.get(variant.height);
+        if (!previous || previous.bandwidth < variant.bandwidth) byHeight.set(variant.height, variant);
+      });
+      return Array.from(byHeight.values())
+        .sort((a, b) => b.height - a.height)
+        .slice(0, 6);
+    } catch (e) {
+      return [];
+    }
+  }
+
   // Guess video height from URL hints (/1080/, _720p, quality_480p, 1080P_2000K, 1920x1080…).
   function guessHeightFromUrl(url) {
     try {
@@ -483,10 +513,19 @@
         const h = parseInt(wh[2], 10);
         if (h >= 200 && h <= 2300) return h;
       }
-      const m = url.match(/(?:\/|_|-)(\d{3,4})p?(?:\/|\.|_|-|$)/i);
+      const parsedUrl = new URL(url);
+      for (const key of ["quality", "video_quality", "resolution", "height", "res"]) {
+        const value = parsedUrl.searchParams.get(key) || "";
+        const match = value.match(/^(\d{3,4})p?$/i);
+        if (match) {
+          const height = parseInt(match[1], 10);
+          if (height >= 200 && height <= 4320) return height;
+        }
+      }
+      const m = url.match(/(?:\/|_|-)(\d{3,4})p(?:\/|\.|_|-|\?|#|&|$)/i);
       if (m) {
         const h = parseInt(m[1], 10);
-        if (h >= 200 && h <= 2300) return h;
+        if (h >= 200 && h <= 4320) return h;
       }
     } catch (e) {}
     return 0;
@@ -589,7 +628,10 @@
       !m.url.includes("init.m4s") &&
       !m.url.includes("range=") &&
       !m.url.includes("/segment") &&
-      !m.url.includes("/frag")
+      !m.url.includes("/frag") &&
+      !(!/\.(m3u8|mpd)(\?|#|$)/i.test(m.url) &&
+        Number(m.contentLengthBytes) > 0 &&
+        Number(m.contentLengthBytes) < 256 * 1024)
     );
 
     // 1. Check for HLS (.m3u8) or DASH (.mpd) stream.
@@ -619,14 +661,17 @@
     if (streamItem) {
       const isHls = streamItem.url.includes(".m3u8") || streamItem.type === "hls" ||
         (streamItem.contentType && streamItem.contentType.includes("mpegurl"));
+      const isDash = streamItem.url.includes(".mpd") || streamItem.type === "dash" ||
+        (streamItem.contentType && streamItem.contentType.includes("dash"));
       const referrer = streamItem.referer || postPageUrl;
       const userAgent = streamItem.userAgent || navigator.userAgent;
 
       // List REAL renditions from the master playlist when possible.
       // Otherwise show ONE honest entry for the stream as captured.
       let variants = [];
-      if (isHls && !isRenditionLike(streamItem.url)) {
-        variants = await getHlsVariants(streamItem.url);
+      if (!isRenditionLike(streamItem.url)) {
+        if (isHls) variants = await getHlsVariants(streamItem.url);
+        else if (isDash) variants = await getDashVariants(streamItem.url);
       }
 
       if (variants.length > 0) {
@@ -644,30 +689,29 @@
             referrer: referrer,
             userAgent: userAgent,
             badge: label.toUpperCase(),
-            sub: `Format: MP4 | Res: (${v.width}x${v.height})`
+            sub: `Available quality • Res: (${v.width}x${v.height})`
           });
         });
       } else {
-        // Master unreadable or captured stream is a single-track sub-rendition (lacks sound):
-        // Fall back to postPageUrl so yt-dlp resolves the complete presentation with sound!
+        // If the master cannot be inspected, offer only a rendition confirmed by playback metadata.
         const res = getResolutionFromVideo(video);
-        const label = res ? res.label : "Video";
-        const downloadUrl = (isRenditionLike(streamItem.url) && postPageUrl)
-          ? postPageUrl
-          : streamItem.url;
-
-        items.push({
-          displayName: `${title} - ${label}.mp4`,
-          title: `${title} - ${label}`,
-          quality: res ? res.label : "best",
-          format: "mp4",
-          url: downloadUrl,
-          pageUrl: postPageUrl,
-          referrer: referrer,
-          userAgent: userAgent,
-          badge: res ? res.label.toUpperCase() : "MP4",
-          sub: res ? `Format: MP4 | Res: ${res.res}` : `Format: MP4`
-        });
+        if (res) {
+          const downloadUrl = (isRenditionLike(streamItem.url) && postPageUrl)
+            ? postPageUrl
+            : streamItem.url;
+          items.push({
+            displayName: `${title} - ${res.label}.mp4`,
+            title: `${title} - ${res.label}`,
+            quality: res.label,
+            format: "mp4",
+            url: downloadUrl,
+            pageUrl: postPageUrl,
+            referrer: referrer,
+            userAgent: userAgent,
+            badge: res.label.toUpperCase(),
+            sub: `Available quality • Res: ${res.res}`
+          });
+        }
       }
 
       items.push({
@@ -717,27 +761,37 @@
         items.push({
           displayName: `${title} - ${label}.${ext}`,
           title: `${title} - ${label}`,
-          quality: h > 0 ? label : "best",
+          quality: h > 0 ? label : "file",
           format: ext,
           url: m.url,
           referrer: m.referer || window.location.href,
           userAgent: m.userAgent || navigator.userAgent,
           badge: h > 0 ? label.toUpperCase() : ext.toUpperCase(),
-          sub: `Format: ${ext.toUpperCase()}${resStr ? ` | Res: ${resStr}` : ""} • direct link`
+          sub: h > 0 ? `Available quality • Res: ${resStr}` : `Direct ${ext.toUpperCase()} file`
         });
       });
 
     // 3. Other captured direct video files (mp4, webm, ts, etc.) - top 3, skip dupes.
     // Resolution: playing rendition first, URL hint second - never fabricated.
     const remainingDirects = directMediaItems.filter(m => !embeddedUrls.has(m.url));
-    remainingDirects.slice(0, 3).forEach((m, idx) => {
+    const getDirectHeight = media => guessHeightFromUrl(media.url) || (media.url === directSrc ? videoHeight : 0);
+    remainingDirects.sort((a, b) => getDirectHeight(b) - getDirectHeight(a));
+    const seenDirectHeights = new Set();
+    const uniqueDirects = remainingDirects.filter(media => {
+      const height = getDirectHeight(media);
+      if (height === 0) return true;
+      if (seenDirectHeights.has(height)) return false;
+      seenDirectHeights.add(height);
+      return true;
+    });
+    uniqueDirects.slice(0, 6).forEach((m, idx) => {
       let ext = "mp4";
       const mExt = m.url.split("?")[0].match(/\.(mp4|webm|mkv|flv|ts|avi)($|\?)/i);
       if (mExt) ext = mExt[1].toLowerCase();
 
       const urlH = guessHeightFromUrl(m.url);
-      const h = videoHeight > 0 ? videoHeight : urlH;
-      const w = videoWidth > 0 && videoHeight > 0 ? videoWidth : (h > 0 ? Math.round(h * 16 / 9) : 0);
+      const h = urlH > 0 ? urlH : (m.url === directSrc ? videoHeight : 0);
+      const w = h === videoHeight && videoWidth > 0 ? videoWidth : (h > 0 ? Math.round(h * 16 / 9) : 0);
       const resStr = h > 0 ? `(${w}x${h})` : "";
       const codec = getCodecName(m.contentType || m.mimeType, ext);
       const codecPart = codec ? ` | Codec: ${codec}` : "";
@@ -747,13 +801,13 @@
       items.push({
         displayName: `${title} - ${qLabel}.${ext}`,
         title: `${title} - ${qLabel}`,
-        quality: h > 0 ? `${h}p` : "best",
+        quality: h > 0 ? `${h}p` : "file",
         format: ext,
         url: m.url,
         referrer: m.referer || window.location.href,
         userAgent: m.userAgent || navigator.userAgent,
         badge: h > 0 ? qLabel.toUpperCase() : ext.toUpperCase(),
-        sub: `Format: ${ext.toUpperCase()}${resStr ? ` | Res: ${resStr}` : ""}${codecPart}${sizeInfo}`
+        sub: `${h > 0 ? `Available quality • Res: ${resStr}` : `Direct ${ext.toUpperCase()} file`}${codecPart}${sizeInfo}`
       });
     });
 
@@ -771,14 +825,14 @@
       items.push({
         displayName: `${title} - ${label}.${ext}`,
         title: `${title} - ${label}`,
-        quality: h > 0 ? label : "best",
+        quality: h > 0 ? label : "file",
         format: ext,
         url: directSrc,
         pageUrl: postPageUrl,
         referrer: postPageUrl,
         userAgent: navigator.userAgent,
         badge: h > 0 ? label.toUpperCase() : ext.toUpperCase(),
-        sub: h > 0 ? `Format: ${ext.toUpperCase()} | Res: (${w}x${h})` : `Format: ${ext.toUpperCase()}`
+        sub: h > 0 ? `Available quality • Res: (${w}x${h})` : `Direct ${ext.toUpperCase()} file`
       });
     }
 
@@ -788,19 +842,20 @@
     if (items.length === 0) {
       const pageUrl = postPageUrl;
       const res = getResolutionFromVideo(video);
-      const label = res ? res.label : "Video";
-      items.push({
-        displayName: `${title} - ${label}.mp4`,
-        title: `${title} - ${label}`,
-        quality: res ? res.label : "best",
-        format: "mp4",
-        url: pageUrl,
-        pageUrl: pageUrl,
-        referrer: pageUrl,
-        userAgent: navigator.userAgent,
-        badge: res ? res.label.toUpperCase() : "MP4",
-        sub: res ? `Format: MP4 | Res: ${res.res}` : `Format: MP4`
-      });
+      if (res) {
+        items.push({
+          displayName: `${title} - ${res.label}.mp4`,
+          title: `${title} - ${res.label}`,
+          quality: res.label,
+          format: "mp4",
+          url: pageUrl,
+          pageUrl: pageUrl,
+          referrer: pageUrl,
+          userAgent: navigator.userAgent,
+          badge: res.label.toUpperCase(),
+          sub: `Available quality • Res: ${res.res}`
+        });
+      }
       items.push({
         displayName: `${title} - Audio.mp3`,
         title: `${title} - Audio`,
@@ -906,6 +961,8 @@
   }
 
   async function populateDropdownItems(menu, video, btn) {
+    const generation = (menu._populateGeneration || 0) + 1;
+    menu._populateGeneration = generation;
     try {
       // One pipeline for every page: no per-site branches.
       let items = [];
@@ -915,6 +972,7 @@
         if (response && response.media) bgMedia = response.media;
       }
       items = await getGenericVideoItems(video, bgMedia);
+      if (menu._populateGeneration !== generation) return;
 
       if (items.length === 0) {
         const empty = document.createElement("div");
@@ -970,6 +1028,7 @@
         });
       }
     } catch (err) {
+      if (menu._populateGeneration !== generation) return;
       const empty = document.createElement("div");
       empty.className = "wrench-dropdown-empty";
       empty.textContent = "Error loading streams: " + err.message;
@@ -991,7 +1050,7 @@
       pageUrl: item.pageUrl || window.location.href,
       referrer: item.referrer || document.referrer || window.location.href,
       userAgent: item.userAgent || navigator.userAgent,
-      prompt: false // Start immediately like IDM
+      prompt: true
     };
 
     if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {

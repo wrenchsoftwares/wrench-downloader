@@ -33,4 +33,5 @@ public static class PortablePaths
     public static string HistoryFilePath => Path.Combine(DataDirectory, "history.json");
     public static string SettingsFilePath => Path.Combine(DataDirectory, "settings.json");
     public static string StartupLogPath => Path.Combine(DataDirectory, "startup.log");
+    public static string DownloadPartsDirectory => Path.Combine(DataDirectory, "Parts");
 }

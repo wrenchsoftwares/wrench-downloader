@@ -31,6 +31,7 @@ public partial class App : Application
     /// </summary>
     public App()
     {
+        AppLocalization.Initialize();
         string logPath = PortablePaths.StartupLogPath;
         System.IO.File.AppendAllText(logPath, $"[{System.DateTime.Now}] App() constructor start\n");
         this.UnhandledException += (s, e) =>

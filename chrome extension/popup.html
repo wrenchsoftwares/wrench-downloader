@@ -53,15 +53,33 @@
       gap: 2px;
       transition: background 0.15s;
     }
+    .item-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-width: 0;
+    }
     .item:hover {
       background: #0078d4;
     }
     .item-title {
+      min-width: 0;
       font-size: 12px;
       font-weight: 500;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+    .quality-tag {
+      flex: 0 0 auto;
+      padding: 2px 6px;
+      border: 1px solid #0f6cbd;
+      border-radius: 10px;
+      background: #12324a;
+      color: #b7e3ff;
+      font-size: 9px;
+      font-weight: 700;
     }
     .item-url {
       font-size: 10px;

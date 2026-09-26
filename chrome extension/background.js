@@ -120,6 +120,7 @@ chrome.webRequest.onHeadersReceived.addListener(
         title: guessTitle(url),
         type: type,
         size: formatBytes(contentLength),
+        contentLengthBytes: contentLength,
         contentType: contentType,
         referer: headers.referer || details.initiator || "",
         userAgent: headers.userAgent || "",
@@ -215,6 +216,7 @@ function addDetectedMedia(tabId, item) {
   } else {
     // Update size or headers if newly resolved
     if (item.size && !existing.size) existing.size = item.size;
+    if (item.contentLengthBytes && !existing.contentLengthBytes) existing.contentLengthBytes = item.contentLengthBytes;
     if (item.referer && !existing.referer) existing.referer = item.referer;
     if (item.userAgent && !existing.userAgent) existing.userAgent = item.userAgent;
   }

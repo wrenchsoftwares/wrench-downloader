@@ -51,17 +51,26 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (!item.url || item.isPromptToPlay) return;
       const div = document.createElement("div");
       div.className = "item";
-      div.innerHTML = `
-        <div class="item-title">${escapeHtml(item.displayName || item.title)}</div>
-        <div class="item-url">${escapeHtml(item.sub || "")}</div>
-      `;
+      const heading = document.createElement("div");
+      heading.className = "item-heading";
+      const title = document.createElement("div");
+      title.className = "item-title";
+      title.textContent = item.displayName || item.title || "Video";
+      const tag = document.createElement("span");
+      tag.className = "quality-tag";
+      tag.textContent = item.badge || getMediaTag(item);
+      heading.append(title, tag);
+      const details = document.createElement("div");
+      details.className = "item-url";
+      details.textContent = item.sub || "";
+      div.append(heading, details);
       div.addEventListener("click", () => {
         chrome.runtime.sendMessage({
           action: "SEND_TO_APP",
           payload: {
             url: item.url,
             title: item.title,
-            quality: item.quality || "best",
+            quality: item.quality || "file",
             format: item.format || "mp4",
             pageUrl: activeTab.url,
             referrer: item.referrer || activeTab.url,
@@ -86,7 +95,17 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
 
       listEl.innerHTML = "";
-      response.media.forEach((item) => {
+      const media = response.media.filter(item => {
+        const isManifest = item.type === "hls" || item.type === "dash" || /\.(m3u8|mpd)(\?|$)/i.test(item.url);
+        return isManifest || !item.contentLengthBytes || item.contentLengthBytes >= 256 * 1024;
+      });
+      if (media.length === 0) {
+        renderPageFallback();
+        return;
+      }
+
+      listEl.innerHTML = "";
+      media.forEach((item) => {
         const div = document.createElement("div");
         div.className = "item";
         const cleanTitle = (item.title || activeTab.title || "Download").replace(/[\/\\:*?"<>|]/g, "").trim();
@@ -96,14 +115,26 @@ document.addEventListener("DOMContentLoaded", async () => {
         if (item.type === "hls" || item.type === "dash") format = "mp4";
 
         const isStream = item.type === "hls" || item.type === "dash" || item.type === "video" || item.type === "audio";
-        const qLabel = item.quality || (isStream ? (format === "mp3" ? "Audio" : (item.size ? item.size : "Media")) : "File");
+        const hintedQuality = item.quality && /^\d{3,4}p$/i.test(item.quality)
+          ? item.quality.toUpperCase()
+          : guessQualityTag(item.url);
+        const qLabel = item.type === "audio" ? "audio" : (hintedQuality || (isStream ? "auto" : "file"));
         const resStr = item.size ? `(Size: ${item.size})` : "";
         const filename = format && !cleanTitle.toLowerCase().endsWith("." + format) ? `${cleanTitle}.${format}` : cleanTitle;
 
-        div.innerHTML = `
-          <div class="item-title">${escapeHtml(filename)}</div>
-          <div class="item-url">${format ? `Type: ${format.toUpperCase()}` : ""}${resStr ? ` | ${resStr}` : ""}</div>
-        `;
+        const heading = document.createElement("div");
+        heading.className = "item-heading";
+        const title = document.createElement("div");
+        title.className = "item-title";
+        title.textContent = filename;
+        const tag = document.createElement("span");
+        tag.className = "quality-tag";
+        tag.textContent = hintedQuality || (item.type === "audio" ? "MP3" : (format || item.type || "FILE")).toUpperCase();
+        heading.append(title, tag);
+        const details = document.createElement("div");
+        details.className = "item-url";
+        details.textContent = `${format ? `Type: ${format.toUpperCase()}` : ""}${resStr ? ` | ${resStr}` : ""}`;
+        div.append(heading, details);
 
         div.addEventListener("click", () => {
           chrome.runtime.sendMessage({
@@ -144,6 +175,17 @@ function escapeHtml(str) {
       '"': '&quot;'
     }[tag] || tag)
   );
+}
+
+function guessQualityTag(url) {
+  const match = String(url || "").match(/(?:^|[\/_-])(\d{3,4})p?(?:[\/_?&#.-]|$)/i);
+  const height = match ? Number(match[1]) : 0;
+  return height >= 200 && height <= 4320 ? `${height}P` : "";
+}
+
+function getMediaTag(item) {
+  if (item.quality && /^\d{3,4}p$/i.test(item.quality)) return item.quality.toUpperCase();
+  return guessQualityTag(item.url) || (item.format || "VIDEO").toUpperCase();
 }
 
 // Last-resort when no media or downloadable stream was detected on the page

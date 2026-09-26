@@ -28,9 +28,9 @@
 
                 <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
                     <TextBlock Text="🔧" FontSize="22" VerticalAlignment="Center" />
-                    <TextBlock Text="Wrench Downloader" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    <TextBlock x:Name="AppNameTextBlock" Text="Wrench Downloader" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center" />
                     <Border Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="4" Padding="6,2" VerticalAlignment="Center">
-                        <TextBlock Text="v26.1.3" FontSize="11" FontWeight="SemiBold" Foreground="White" />
+                        <TextBlock Text="v26.2" FontSize="11" FontWeight="SemiBold" Foreground="White" />
                     </Border>
                 </StackPanel>
 
@@ -40,8 +40,8 @@
                 </Grid>
 
                 <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8">
-                    <Button Content="Add Download" Style="{ThemeResource AccentButtonStyle}" Click="OnAddDownloadClick" />
-                    <Button Content="Open Folder" Click="OnOpenFolderClick" />
+                    <Button x:Name="AddDownloadButton" Content="Add Download" Style="{ThemeResource AccentButtonStyle}" Click="OnAddDownloadClick" />
+                    <Button x:Name="OpenFolderButton" Content="Open Folder" Click="OnOpenFolderClick" />
                 </StackPanel>
             </Grid>
         </Border>
@@ -58,17 +58,18 @@
                 <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                     <TextBlock x:Name="DownloadCountTextBlock" Text="0 Downloads" FontSize="13" FontWeight="Medium" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,8,0" />
                     <Button x:Name="RemoveSelectedButton" Content="Remove Selected" Click="OnRemoveSelectedClick" IsEnabled="False" />
-                    <Button Content="Remove Completed" Click="OnRemoveCompletedClick" ToolTipService.ToolTip="Remove all finished downloads from the list" />
-                    <Button Content="Remove All" Click="OnRemoveAllClick" ToolTipService.ToolTip="Clear the entire list (cancels active downloads)" />
+                    <Button x:Name="RemoveCompletedButton" Content="Remove Completed" Click="OnRemoveCompletedClick" ToolTipService.ToolTip="Remove all finished downloads from the list" />
+                    <Button x:Name="RemoveAllButton" Content="Remove All" Click="OnRemoveAllClick" ToolTipService.ToolTip="Clear the entire list (cancels active downloads)" />
                 </StackPanel>
 
                 <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                    <TextBlock Text="Chrome Companion:" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" VerticalAlignment="Center" />
-                    <TextBlock Text="● Listening (127.0.0.1:45732)" FontSize="12" FontWeight="SemiBold" Foreground="#107C41" VerticalAlignment="Center" />
-                    <Button Click="OnSettingsClick" ToolTipService.ToolTip="Settings" Margin="8,0,0,0">
+                    <Button x:Name="QueueToggleButton" Content="Pause Queue" Click="OnQueueToggleClick" />
+                    <TextBlock x:Name="CompanionLabelTextBlock" Text="Chrome Companion:" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" VerticalAlignment="Center" />
+                    <TextBlock x:Name="BridgeStatusTextBlock" Text="● Listening (127.0.0.1:45732)" FontSize="12" FontWeight="SemiBold" Foreground="#107C41" VerticalAlignment="Center" />
+                    <Button x:Name="SettingsButton" Click="OnSettingsClick" ToolTipService.ToolTip="Settings" Margin="8,0,0,0">
                         <FontIcon Glyph="&#xE713;" FontSize="14" />
                     </Button>
-                    <Button Click="OnAboutClick" ToolTipService.ToolTip="About Wrench Downloader">
+                    <Button x:Name="AboutButton" Click="OnAboutClick" ToolTipService.ToolTip="About Wrench Downloader">
                         <FontIcon Glyph="&#xE946;" FontSize="14" />
                     </Button>
                 </StackPanel>
@@ -85,43 +86,6 @@
                             CornerRadius="8" 
                             Padding="14,12" 
                             Margin="0,0,0,8">
-                        <Border.ContextFlyout>
-                            <MenuFlyout>
-                                <MenuFlyoutItem Text="Pause / Resume" Click="OnTogglePauseDownloadClick">
-                                    <MenuFlyoutItem.Icon>
-                                        <FontIcon Glyph="&#xE768;" />
-                                    </MenuFlyoutItem.Icon>
-                                </MenuFlyoutItem>
-                                <MenuFlyoutSeparator />
-                                <MenuFlyoutItem Text="Remove from List" Click="OnRemoveDownloadClick">
-                                    <MenuFlyoutItem.Icon>
-                                        <FontIcon Glyph="&#xE74D;" />
-                                    </MenuFlyoutItem.Icon>
-                                </MenuFlyoutItem>
-                                <MenuFlyoutItem Text="Delete File" Click="OnDeleteDownloadedFileClick">
-                                    <MenuFlyoutItem.Icon>
-                                        <FontIcon Glyph="&#xE74D;" Foreground="IndianRed" />
-                                    </MenuFlyoutItem.Icon>
-                                </MenuFlyoutItem>
-                                <MenuFlyoutSeparator />
-                                <MenuFlyoutItem Text="Open File" Click="OnOpenFileClick">
-                                    <MenuFlyoutItem.Icon>
-                                        <FontIcon Glyph="&#xE8E5;" />
-                                    </MenuFlyoutItem.Icon>
-                                </MenuFlyoutItem>
-                                <MenuFlyoutItem Text="Open Containing Folder" Click="OnOpenContainingFolderClick">
-                                    <MenuFlyoutItem.Icon>
-                                        <FontIcon Glyph="&#xE8B7;" />
-                                    </MenuFlyoutItem.Icon>
-                                </MenuFlyoutItem>
-                                <MenuFlyoutSeparator />
-                                <MenuFlyoutItem Text="Copy Download Link" Click="OnCopyDownloadLinkClick">
-                                    <MenuFlyoutItem.Icon>
-                                        <FontIcon Glyph="&#xE8C8;" />
-                                    </MenuFlyoutItem.Icon>
-                                </MenuFlyoutItem>
-                            </MenuFlyout>
-                        </Border.ContextFlyout>
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />

@@ -14,8 +14,13 @@ public sealed partial class MainPage : Page
     public MainPage()
     {
         InitializeComponent();
-
-        // TODO: Add your initialization logic here.
+        PageTitleTextBlock.Text = $"🔧 {AppLocalization.Get("app.title")}";
+        SubtitleTextBlock.Text = AppLocalization.Get("main.subtitle");
+        UrlTextBox.PlaceholderText = AppLocalization.Get("main.urlPlaceholder");
+        AddDownloadButton.Content = AppLocalization.Get("main.add");
+        GrabVideoButton.Content = AppLocalization.Get("main.grabVideo");
+        StatusTextBlock.Text = AppLocalization.Get("main.ready");
+        FlowDirection = AppLocalization.IsRightToLeft ? Microsoft.UI.Xaml.FlowDirection.RightToLeft : Microsoft.UI.Xaml.FlowDirection.LeftToRight;
     }
 
     private void OnAddDownloadClick(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
@@ -23,16 +28,16 @@ public sealed partial class MainPage : Page
         string url = UrlTextBox.Text.Trim();
         if (!string.IsNullOrEmpty(url))
         {
-            StatusTextBlock.Text = $"Started download task for: {url}";
+            StatusTextBlock.Text = AppLocalization.Format("main.startedTask", url);
         }
         else
         {
-            StatusTextBlock.Text = "Please enter a valid URL.";
+            StatusTextBlock.Text = AppLocalization.Get("main.invalidUrl");
         }
     }
 
     private void OnGrabVideoClick(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
     {
-        StatusTextBlock.Text = "Sniffing video streams from browser extension...";
+        StatusTextBlock.Text = AppLocalization.Get("main.sniffing");
     }
 }

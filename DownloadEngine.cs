@@ -501,10 +501,11 @@ public class DownloadEngine
 
             if (proc.ExitCode == 0 || (!string.IsNullOrEmpty(finalFile) && File.Exists(finalFile) && new FileInfo(finalFile).Length > 1024 * 1024))
             {
-                // Finished media leaves the scratch folder for the real
-                // downloads folder (with collision numbering); transients die here.
-                var moved = MoveFinishedMediaToDownloads(partsSubdir, downloadsFolder);
-                try { if (Directory.Exists(partsSubdir)) Directory.Delete(partsSubdir, recursive: true); } catch { }
+                // Finished files leave the scratch folder for the real
+                // downloads folder (with collision numbering). The scratch
+                // folder is removed only when nothing preservable remains.
+                var moved = MoveFinishedMediaToDownloads(partsSubdir, downloadsFolder, item);
+                DeletePartsSubdirIfClean(partsSubdir, item);
                 string dest = "";
                 if (!string.IsNullOrEmpty(finalFile))
                 {
@@ -807,8 +808,15 @@ public class DownloadEngine
         }
     }
 
-    private static readonly string[] FinishedMediaExtensions =
-        [".mp4", ".mkv", ".webm", ".mov", ".avi", ".ts", ".mp3", ".m4a", ".flac", ".ogg", ".wav"];
+    /// <summary>Transient download debris. Everything else must be preserved.</summary>
+    public static bool IsTransientFile(string path)
+    {
+        string name = Path.GetFileName(path);
+        return name.EndsWith(".part", StringComparison.OrdinalIgnoreCase) ||
+               name.EndsWith(".ytdl", StringComparison.OrdinalIgnoreCase) ||
+               name.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase) ||
+               name.EndsWith(".temp", StringComparison.OrdinalIgnoreCase);
+    }
 
     /// <summary>
     /// Isolated scratch folder for one download. EVERYTHING transient
@@ -848,36 +856,60 @@ public class DownloadEngine
     }
 
     /// <summary>
-    /// Move every finished media file from a Parts subfolder to the downloads
+    /// Move every finished file from a Parts subfolder to the downloads
     /// folder (preserving playlist subfolders), with collision numbering.
+    /// Moves ALL non-transient files: an unexpected file landing in Downloads
+    /// is always better than silently deleting a finished download.
     /// Returns source-&gt;destination pairs.
     /// </summary>
     public static List<(string Source, string Dest)> MoveFinishedMediaToDownloads(
-        string partsSubdir, string downloadsFolder)
+        string partsSubdir, string downloadsFolder, DownloadItem? item = null)
     {
         var moved = new List<(string Source, string Dest)>();
         if (!Directory.Exists(partsSubdir)) return moved;
         foreach (string source in Directory.EnumerateFiles(partsSubdir, "*", SearchOption.AllDirectories))
         {
-            string name = Path.GetFileName(source);
-            if (name.EndsWith(".part", StringComparison.OrdinalIgnoreCase) ||
-                name.EndsWith(".ytdl", StringComparison.OrdinalIgnoreCase) ||
-                name.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase) ||
-                name.EndsWith(".temp", StringComparison.OrdinalIgnoreCase) ||
-                name.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
-                continue;
-            if (!FinishedMediaExtensions.Contains(Path.GetExtension(source), StringComparer.OrdinalIgnoreCase))
+            if (IsTransientFile(source))
                 continue;
             string relative = Path.GetRelativePath(partsSubdir, Path.GetDirectoryName(source)!);
             string destDir = relative == "." ? downloadsFolder : Path.Combine(downloadsFolder, relative);
             try
             {
-                string dest = MoveFileRobust(source, destDir, name);
+                string dest = MoveFileRobust(source, destDir, Path.GetFileName(source));
                 moved.Add((source, dest));
             }
-            catch { }
+            catch (Exception ex)
+            {
+                if (item != null) LogDiag(item, $"move failed for {source}: {ex.Message}");
+            }
         }
         return moved;
+    }
+
+    /// <summary>
+    /// Delete a Parts subfolder ONLY when no preservable file remains inside.
+    /// Returns true when the folder is gone.
+    /// </summary>
+    public static bool DeletePartsSubdirIfClean(string partsSubdir, DownloadItem? item = null)
+    {
+        try
+        {
+            if (!Directory.Exists(partsSubdir)) return true;
+            bool remnants = Directory.EnumerateFiles(partsSubdir, "*", SearchOption.AllDirectories)
+                .Any(f => !IsTransientFile(f));
+            if (remnants)
+            {
+                if (item != null) LogDiag(item, $"parts folder kept, unmoved files remain: {partsSubdir}");
+                return false;
+            }
+            Directory.Delete(partsSubdir, recursive: true);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            if (item != null) LogDiag(item, $"parts cleanup failed: {ex.Message}");
+            return false;
+        }
     }
 
     private static bool _partsCleanupDone;

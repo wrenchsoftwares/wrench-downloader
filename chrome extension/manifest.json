@@ -6,7 +6,6 @@
   "permissions": [
     "downloads",
     "webRequest",
-    "webRequestExtraHeaders",
     "storage",
     "activeTab",
     "tabs"

@@ -106,6 +106,7 @@ public class ExtensionBridgeServer
                 string pageUrl = root.TryGetProperty("pageUrl", out var pEl) ? pEl.GetString() ?? "" : "";
                 string referrer = root.TryGetProperty("referrer", out var rEl) ? rEl.GetString() ?? "" : "";
                 string userAgent = root.TryGetProperty("userAgent", out var uEl) ? uEl.GetString() ?? "" : "";
+                string poToken = root.TryGetProperty("poToken", out var potEl) ? potEl.GetString() ?? "" : "";
                 List<BrowserCookie>? cookies = null;
                 if (root.TryGetProperty("cookies", out var cookiesEl) && cookiesEl.ValueKind == JsonValueKind.Array)
                 {
@@ -146,6 +147,7 @@ public class ExtensionBridgeServer
                         Referrer = referrer,
                         UserAgent = userAgent,
                         Cookies = cookies,
+                        PoToken = poToken,
                         Status = DownloadStatus.Queued,
                         StatusText = "Added from browser extension"
                     };
@@ -154,7 +156,7 @@ public class ExtensionBridgeServer
 #if DEBUG
                     DownloadEngine.Track(item,
                         $"BRIDGE-RECV site={SafeHost(pageUrl)} quality={quality} " +
-                        $"cookies={(cookies?.Count ?? 0)} prompt={showPrompt} url={url}");
+                        $"cookies={(cookies?.Count ?? 0)} pot={(!string.IsNullOrEmpty(poToken) ? "yes" : "no")} prompt={showPrompt} url={url}");
 #endif
 
                     byte[] respBytes = Encoding.UTF8.GetBytes("{\"success\":true,\"id\":\"" + item.Id + "\"}");

@@ -71,6 +71,9 @@ public class DownloadItem : INotifyPropertyChanged
     /// <summary>Live browser-session cookies handed over by the extension
     /// (works while the browser runs, unlike cookie-DB export).</summary>
     public List<BrowserCookie>? Cookies { get; set; }
+    /// <summary>Browser-minted PO token harvested from the playing tab's
+    /// stream requests (proves a genuine client to YouTube).</summary>
+    public string PoToken { get; set; } = "";
     public string TargetFolder { get; set; } = "";
     public string QueueName { get; set; } = "Main queue";
     public bool DownloadPlaylist { get; set; }

@@ -7,6 +7,32 @@ const mediaByTab = new Map();
 const requestHeadersMap = new Map(); // url -> { referer, userAgent }
 const contentDispositionMap = new Map(); // url -> server filename
 const APP_SERVER_URL = "http://127.0.0.1:45732/api/download";
+// Latest browser-minted PO token per tab, harvested from videoplayback URLs
+// (their pot= parameter). The playing browser already passed every gate, so
+// its token + session is exactly what the desktop app needs and cannot mint.
+const potByTab = new Map(); // tabId -> { token, time }
+const POT_FRESH_MS = 30 * 60 * 1000;
+
+function harvestPot(tabId, url) {
+  try {
+    if (tabId < 0 || !url) return;
+    const m = String(url).match(/[?&]pot=([^&#]+)/i);
+    if (!m || !m[1] || m[1].length < 8) return;
+    potByTab.set(tabId, { token: decodeURIComponent(m[1]), time: Date.now() });
+    if (potByTab.size > 50) {
+      const firstKey = potByTab.keys().next().value;
+      potByTab.delete(firstKey);
+    }
+  } catch (e) {}
+}
+
+function freshPot(tabId) {
+  try {
+    const e = potByTab.get(tabId);
+    if (e && (Date.now() - e.time < POT_FRESH_MS)) return e.token;
+  } catch (err) {}
+  return "";
+}
 
 // Debug tracking: last sends to the desktop app (what site, what quality,
 // how many session cookies, when). Pulled via GET_RECENT_SENDS when the user
@@ -23,6 +49,7 @@ function trackSend(payload) {
       quality: payload.quality || "",
       format: payload.format || "",
       cookies: (payload.cookies || []).length,
+      pot: payload.poToken ? 1 : 0,
       urlHost: (() => { try { return new URL(payload.url || "").hostname; } catch (e) { return ""; } })()
     });
     if (recentSends.length > 20) recentSends.pop();
@@ -81,6 +108,10 @@ chrome.webRequest.onHeadersReceived.addListener(
   (details) => {
     if (!details.url || details.tabId < 0) return;
     const url = details.url;
+
+    // Harvest attestation tokens from EVERY playing-stream request (even
+    // chunk continuations and SABR handshakes that are otherwise ignored).
+    harvestPot(details.tabId, url);
 
     // Ignore chunked video fragments / ping requests to avoid cluttering dropdown.
     // Generic URL patterns only - no per-site rules.
@@ -169,6 +200,8 @@ chrome.webRequest.onBeforeRequest.addListener(
   (details) => {
     if (!details.url || details.tabId < 0) return;
     const url = details.url;
+
+    harvestPot(details.tabId, url);
 
     if (
       url.includes("/videoplayback") ||
@@ -279,6 +312,7 @@ function addDetectedMedia(tabId, item) {
 // Clean up when tabs close
 chrome.tabs.onRemoved.addListener((tabId) => {
   mediaByTab.delete(tabId);
+  potByTab.delete(tabId);
 });
 
 // Intercept general browser downloads (MediaFire, direct downloads, zip, exe, rar, pdf, iso, etc.)
@@ -402,15 +436,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === "SEND_TO_APP") {
+    const sendTabId = sender.tab ? sender.tab.id : message.tabId;
+    try {
+      if (sendTabId !== undefined && sendTabId !== null && sendTabId >= 0 &&
+          message.payload && !message.payload.poToken) {
+        const pot = freshPot(sendTabId);
+        if (pot) message.payload.poToken = pot;
+      }
+    } catch (e) {}
     trackSend(message.payload);
-    sendToDesktopApp(message.payload)
+    sendToDesktopApp(message.payload, sendTabId)
       .then((res) => sendResponse({ success: true, result: res }))
       .catch((err) => sendResponse({ success: false, error: err.message }));
     return true;
   }
 });
 
-async function sendToDesktopApp(payload) {
+async function sendToDesktopApp(payload, tabId) {
   // Hand the app the live browser session: cookie-DB export (yt-dlp
   // --cookies-from-browser) fails while Chrome runs with a locked profile,
   // but the extension can read its own tabs' cookies directly - including
@@ -432,6 +474,14 @@ async function sendToDesktopApp(payload) {
           expiry: c.expirationDate ? Math.floor(c.expirationDate) : 0
         }));
       }
+    }
+  } catch (e) {}
+
+  // Browser-minted attestation for the playing tab (see harvestPot).
+  try {
+    if (!payload.poToken && tabId !== undefined && tabId !== null && tabId >= 0) {
+      const pot = freshPot(tabId);
+      if (pot) payload.poToken = pot;
     }
   } catch (e) {}
 

@@ -322,6 +322,20 @@ public class DownloadEngine
             argsBuilder.Append($"--user-agent \"{item.UserAgent}\" ");
         }
 
+        // Browser-minted PO token (harvested by the extension from the playing
+        // tab's own stream requests): proves a genuine client for the player
+        // and download requests. Sanitized to token characters only.
+        if (!string.IsNullOrWhiteSpace(item.PoToken) &&
+            (PotProviderHelper.IsYouTubeUrl(item.Url) || PotProviderHelper.IsYouTubeUrl(item.PageUrl)))
+        {
+            string token = Regex.Replace(item.PoToken.Trim(), @"[^A-Za-z0-9\-_]", "");
+            if (!string.IsNullOrEmpty(token))
+            {
+                argsBuilder.Append($"--extractor-args \"youtube:po_token=web.gvs+{token}\" ");
+                LogDiag(item, "browser-minted PO token attached");
+            }
+        }
+
         string commonArgs = argsBuilder.ToString();
 
         // Live browser session from the extension: cookie-DB export fails
@@ -340,6 +354,7 @@ public class DownloadEngine
                 LogDiag(item, $"browser session attached ({item.Cookies.Count} cookies)");
             }
         }
+        bool hasSessionJar = extensionCookieFile != null;
 
         // Some video pages gate playback behind an inline JS cookie-challenge
         // in their HTML (a script sets a session cookie, then reloads) while
@@ -739,24 +754,48 @@ public class DownloadEngine
 #endif
                     break;
                 }
-                // Auth-walled content (age checks, login walls, private videos
-                // the user can access): plain requests fail while the user's
-                // browser already holds a verified session - exactly how
-                // browser-attached downloaders get these files. Retry the same
-                // URL through the browser's cookies (chrome -> edge -> brave).
-                // Purely error-driven; no site lists. Skipped when cookie
-                // export itself is broken (same guaranteed failure).
-                if (!cookiesFailed && IsAuthError(lastError))
+                // Gated content (age checks, login walls, bot/PO-token walls,
+                // "reload" playability walls, private videos the user can
+                // access): plain requests fail while the user's browser
+                // already plays the same video - exactly how browser-attached
+                // downloaders get these files. Two phases, both error-driven
+                // (no site lists):
+                //  A. attach a session: plain -> chrome -> edge -> brave.
+                //  B. once an attempt carried a session yet still hit the
+                //     wall, keep the session and switch to an unchallenged
+                //     player client: web_safari (HLS needs no PO token),
+                //     then tv. Session + client answers both gates at once.
+                // Skipped when cookie export itself is broken.
+                if (!cookiesFailed && IsGatedError(lastError))
                 {
-                    string? nextBrowser = NextAuthBrowser(attempt.CookieArgs, attemptUrl, authBrowsersTried);
-                    if (nextBrowser != null)
+                    bool sessionAttached = hasSessionJar ||
+                        (attempt.CookieArgs?.Contains("cookies", StringComparison.OrdinalIgnoreCase) ?? false);
+                    string? nextArgs = null;
+                    if (!sessionAttached)
                     {
-                        authBrowsersTried.Add($"{attemptUrl}|{nextBrowser}");
-                        LogDiag(item, $"auth wall detected, retrying with {nextBrowser} session");
+                        string? nextBrowser = NextAuthBrowser(attempt.CookieArgs, attemptUrl, authBrowsersTried);
+                        if (nextBrowser != null)
+                        {
+                            authBrowsersTried.Add($"{attemptUrl}|{nextBrowser}");
+                            LogDiag(item, $"gated content detected, retrying with {nextBrowser} session");
+                            nextArgs = $"--cookies-from-browser {nextBrowser} ";
+                        }
+                    }
+                    else if (PotProviderHelper.IsYouTubeUrl(item.Url) || PotProviderHelper.IsYouTubeUrl(item.PageUrl))
+                    {
+                        string? clientArgs = NextClientVariant(attempt.CookieArgs, attemptUrl, authBrowsersTried);
+                        if (clientArgs != null)
+                        {
+                            LogDiag(item, $"session attached yet still gated, retrying {clientArgs.Trim()}");
+                            nextArgs = clientArgs;
+                        }
+                    }
+                    if (nextArgs != null)
+                    {
                         pendingUrls.Dequeue();
                         var rest = pendingUrls.ToList();
                         pendingUrls.Clear();
-                        pendingUrls.Enqueue((attemptUrl, $"--cookies-from-browser {nextBrowser} "));
+                        pendingUrls.Enqueue((attemptUrl, nextArgs));
                         foreach (var p in rest) pendingUrls.Enqueue(p);
                         item.Progress = 0;
                         item.SavePath = "";
@@ -1260,12 +1299,13 @@ public class DownloadEngine
     private static string FindJsRuntimeArgs() => _cachedJsRuntimeArgs.Value;
 
     /// <summary>
-    /// Auth-wall signals from yt-dlp output (age checks, login walls, private
-    /// content). Matched against error text only - never against site names.
+    /// Gated-content signals from yt-dlp output (age checks, login walls,
+    /// bot/PO-token walls, playability "reload" walls, private content).
+    /// Matched against error text only - never against site names.
     /// </summary>
-    private static bool IsAuthError(string lastError) =>
+    private static bool IsGatedError(string lastError) =>
         !string.IsNullOrWhiteSpace(lastError) &&
-        Regex.IsMatch(lastError, @"sign in|log ?in|login|confirm your age|age.restrict|private video|pass cookies|cookies required|account.*required", RegexOptions.IgnoreCase);
+        Regex.IsMatch(lastError, @"sign in|log ?in|login|confirm your age|age.restrict|private video|pass cookies|cookies required|account.*required|not a bot|bot check|po_?token|needs? to be reloaded|reload the page", RegexOptions.IgnoreCase);
 
     /// <summary>
     /// Next browser session to try for an auth-walled URL (chrome -&gt; edge
@@ -1285,6 +1325,22 @@ public class DownloadEngine
         for (int i = nextIdx; i < chain.Length; i++)
         {
             if (tried.Add($"{url}|{chain[i]}")) return chain[i];
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Next unchallenged player client for a session-carrying attempt that
+    /// still hit the wall (web_safari first - safe with sessions - then tv).
+    /// Keeps the attempt's existing cookie args; each url+client tried once.
+    /// </summary>
+    private static string? NextClientVariant(string? cookieArgs, string url, HashSet<string> tried)
+    {
+        string[] clients = ["web_safari", "tv"];
+        foreach (string client in clients)
+        {
+            if (tried.Add($"{url}|client:{client}"))
+                return $"{(cookieArgs ?? "").Trim()} --extractor-args \"youtube:player_client={client}\" ".TrimStart();
         }
         return null;
     }
@@ -1351,7 +1407,8 @@ public class DownloadEngine
     {
         Track(item, $"START site={HostOf(item.PageUrl)} " +
             $"page={item.PageUrl} url={item.Url} quality={item.Quality} " +
-            $"cookies={(item.Cookies?.Count ?? 0)} ref={HostOf(item.Referrer)} " +
+            $"cookies={(item.Cookies?.Count ?? 0)} pot={(!string.IsNullOrEmpty(item.PoToken) ? "yes" : "no")} " +
+            $"ref={HostOf(item.Referrer)} " +
             $"ua={(string.IsNullOrEmpty(item.UserAgent) ? "no" : "yes")} " +
             $"playlist={item.DownloadPlaylist}");
     }

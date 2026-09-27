@@ -235,6 +235,15 @@ public class DownloadEngine
         }
         catch { aria2cPath = null; }
 
+        // PO-token provider for YouTube gates (session + token together open
+        // age/bot walls). One-time per session, only for YouTube downloads.
+        try
+        {
+            if (PotProviderHelper.IsYouTubeUrl(item.Url) || PotProviderHelper.IsYouTubeUrl(item.PageUrl))
+                await PotProviderHelper.EnsureAsync(ytdlpPath, cancellationToken);
+        }
+        catch { }
+
         var argsBuilder = new StringBuilder();
         // IDM-style parallel segment download flags with robust retry & timeout settings to ensure it completes
         argsBuilder.Append(item.DownloadPlaylist ? "--yes-playlist " : "--no-playlist ");

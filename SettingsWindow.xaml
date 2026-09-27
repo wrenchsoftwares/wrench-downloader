@@ -75,7 +75,6 @@
                         <Border Height="1" Margin="0,8" Background="{ThemeResource CardStrokeColorDefaultBrush}" />
 
                         <TextBlock x:Name="ConfirmationsHeader" Text="Confirmations" FontWeight="SemiBold" Margin="0,0,0,4" />
-                        <CheckBox x:Name="ConfirmRemoveCheck" />
                         <CheckBox x:Name="ConfirmDeleteCheck" Margin="0,0,0,4" />
 
                         <Border Height="1" Margin="0,8" Background="{ThemeResource CardStrokeColorDefaultBrush}" />

@@ -615,7 +615,7 @@ public sealed partial class MainWindow : Window
         QueueDownload(item);
     }
 
-    private async void OnRemoveDownloadClick(object sender, RoutedEventArgs e)
+    private void OnRemoveDownloadClick(object sender, RoutedEventArgs e)
     {
         var targets = GetTargetItems(sender);
         if (targets.Count == 0)
@@ -623,9 +623,6 @@ public sealed partial class MainWindow : Window
             StatusTextBlock.Text = AppLocalization.Get("main.nothingSelectedRemove");
             return;
         }
-        if (SettingsHelper.ConfirmOnRemove &&
-            !await ConfirmAsync(AppLocalization.Format("dialog.removeMessage", targets.Count), AppLocalization.Get("common.remove")))
-            return;
         foreach (var item in targets)
         {
             RemoveFromDownloadQueue(item);
@@ -636,7 +633,7 @@ public sealed partial class MainWindow : Window
         StatusTextBlock.Text = AppLocalization.Format("main.removedItems", targets.Count);
     }
 
-    private async void OnRemoveSelectedClick(object sender, RoutedEventArgs e)
+    private void OnRemoveSelectedClick(object sender, RoutedEventArgs e)
     {
         var selected = DownloadsListView.SelectedItems.OfType<DownloadItem>().ToList();
         if (selected.Count == 0)
@@ -644,9 +641,6 @@ public sealed partial class MainWindow : Window
             StatusTextBlock.Text = AppLocalization.Get("main.nothingSelectedHelp");
             return;
         }
-        if (SettingsHelper.ConfirmOnRemove &&
-            !await ConfirmAsync(AppLocalization.Format("dialog.removeMessage", selected.Count), AppLocalization.Get("common.remove")))
-            return;
         foreach (var item in selected)
         {
             RemoveFromDownloadQueue(item);
@@ -670,16 +664,13 @@ public sealed partial class MainWindow : Window
         StatusTextBlock.Text = AppLocalization.Format("main.removedCompleted", done.Count);
     }
 
-    private async void OnRemoveAllClick(object sender, RoutedEventArgs e)
+    private void OnRemoveAllClick(object sender, RoutedEventArgs e)
     {
         if (Downloads.Count == 0)
         {
             StatusTextBlock.Text = AppLocalization.Get("main.listEmpty");
             return;
         }
-        if (SettingsHelper.ConfirmOnRemove &&
-            !await ConfirmAsync(AppLocalization.Format("dialog.removeMessage", Downloads.Count), AppLocalization.Get("common.remove")))
-            return;
         _waitingDownloads.Clear();
         foreach (var item in Downloads) { try { item.Cts.Cancel(); } catch { } }
         int n = Downloads.Count;

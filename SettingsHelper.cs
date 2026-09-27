@@ -24,7 +24,6 @@ public static class SettingsHelper
     private const string ThemeKey = "AppTheme";
     private const string ShowCompleteDialogKey = "ShowCompleteDialog";
     private const string PlaySoundOnCompleteKey = "PlaySoundOnComplete";
-    private const string ConfirmOnRemoveKey = "ConfirmOnRemove";
     private const string ConfirmOnDeleteFileKey = "ConfirmOnDeleteFile";
     private const string AutoResumeInterruptedKey = "AutoResumeInterrupted";
     private const string AutoRetryCountKey = "AutoRetryCount";
@@ -46,7 +45,6 @@ public static class SettingsHelper
     private static string? _cachedTheme;
     private static bool? _cachedShowCompleteDialog;
     private static bool? _cachedPlaySoundOnComplete;
-    private static bool? _cachedConfirmOnRemove;
     private static bool? _cachedConfirmOnDeleteFile;
     private static bool? _cachedAutoResumeInterrupted;
     private static int? _cachedAutoRetryCount;
@@ -244,17 +242,6 @@ public static class SettingsHelper
         }
     }
 
-    /// <summary>JDownloader-style affirmation: confirm before removing items from the list.</summary>
-    public static bool ConfirmOnRemove
-    {
-        get
-        {
-            if (_cachedConfirmOnRemove.HasValue) return _cachedConfirmOnRemove.Value;
-            _cachedConfirmOnRemove = ReadValue<bool?>(ConfirmOnRemoveKey) ?? true;
-            return _cachedConfirmOnRemove.Value;
-        }
-    }
-
     /// <summary>Confirm before permanently deleting files from disk.</summary>
     public static bool ConfirmOnDeleteFile
     {
@@ -426,7 +413,7 @@ public static class SettingsHelper
 #endif
     }
 
-    public static void Save(string folder, int fragments, string quality, bool showDialog, bool closeToTray, bool startWithWindows, int maximumConcurrentDownloads, int maximumDownloadRateKBps, bool clipboardMonitorEnabled, bool organizeDownloadsByType, bool showCompleteDialog, bool playSoundOnComplete, bool confirmOnRemove, bool confirmOnDeleteFile, bool autoResumeInterrupted, int autoRetryCount)
+    public static void Save(string folder, int fragments, string quality, bool showDialog, bool closeToTray, bool startWithWindows, int maximumConcurrentDownloads, int maximumDownloadRateKBps, bool clipboardMonitorEnabled, bool organizeDownloadsByType, bool showCompleteDialog, bool playSoundOnComplete, bool confirmOnDeleteFile, bool autoResumeInterrupted, int autoRetryCount)
     {
         _cachedFolder = (!string.IsNullOrWhiteSpace(folder) && Directory.Exists(folder)) ? folder : DefaultDownloadsFolder;
         _cachedFragments = Math.Clamp(fragments, 1, 32);
@@ -439,7 +426,6 @@ public static class SettingsHelper
         _cachedOrganizeDownloadsByType = organizeDownloadsByType;
         _cachedShowCompleteDialog = showCompleteDialog;
         _cachedPlaySoundOnComplete = playSoundOnComplete;
-        _cachedConfirmOnRemove = confirmOnRemove;
         _cachedConfirmOnDeleteFile = confirmOnDeleteFile;
         _cachedAutoResumeInterrupted = autoResumeInterrupted;
         _cachedAutoRetryCount = Math.Clamp(autoRetryCount, 0, 10);
@@ -464,7 +450,6 @@ public static class SettingsHelper
                 values[OrganizeDownloadsKey] = JsonSerializer.SerializeToElement(_cachedOrganizeDownloadsByType.Value);
                 values[ShowCompleteDialogKey] = JsonSerializer.SerializeToElement(_cachedShowCompleteDialog.Value);
                 values[PlaySoundOnCompleteKey] = JsonSerializer.SerializeToElement(_cachedPlaySoundOnComplete.Value);
-                values[ConfirmOnRemoveKey] = JsonSerializer.SerializeToElement(_cachedConfirmOnRemove.Value);
                 values[ConfirmOnDeleteFileKey] = JsonSerializer.SerializeToElement(_cachedConfirmOnDeleteFile.Value);
                 values[AutoResumeInterruptedKey] = JsonSerializer.SerializeToElement(_cachedAutoResumeInterrupted.Value);
                 values[AutoRetryCountKey] = JsonSerializer.SerializeToElement(_cachedAutoRetryCount.Value);
@@ -486,7 +471,6 @@ public static class SettingsHelper
                 values[OrganizeDownloadsKey] = _cachedOrganizeDownloadsByType.Value;
                 values[ShowCompleteDialogKey] = _cachedShowCompleteDialog.Value;
                 values[PlaySoundOnCompleteKey] = _cachedPlaySoundOnComplete.Value;
-                values[ConfirmOnRemoveKey] = _cachedConfirmOnRemove.Value;
                 values[ConfirmOnDeleteFileKey] = _cachedConfirmOnDeleteFile.Value;
                 values[AutoResumeInterruptedKey] = _cachedAutoResumeInterrupted.Value;
                 values[AutoRetryCountKey] = _cachedAutoRetryCount.Value;
@@ -497,16 +481,16 @@ public static class SettingsHelper
 
     public static void Save(string folder, int fragments, string quality, bool showDialog)
     {
-        Save(folder, fragments, quality, showDialog, CloseToTray, StartWithWindows, MaximumConcurrentDownloads, MaximumDownloadRateKBps, ClipboardMonitorEnabled, OrganizeDownloadsByType, ShowCompleteDialog, PlaySoundOnComplete, ConfirmOnRemove, ConfirmOnDeleteFile, AutoResumeInterrupted, AutoRetryCount);
+        Save(folder, fragments, quality, showDialog, CloseToTray, StartWithWindows, MaximumConcurrentDownloads, MaximumDownloadRateKBps, ClipboardMonitorEnabled, OrganizeDownloadsByType, ShowCompleteDialog, PlaySoundOnComplete, ConfirmOnDeleteFile, AutoResumeInterrupted, AutoRetryCount);
     }
 
     public static void Save(string folder, int fragments, string quality, bool showDialog, bool closeToTray, bool startWithWindows)
     {
-        Save(folder, fragments, quality, showDialog, closeToTray, startWithWindows, MaximumConcurrentDownloads, MaximumDownloadRateKBps, ClipboardMonitorEnabled, OrganizeDownloadsByType, ShowCompleteDialog, PlaySoundOnComplete, ConfirmOnRemove, ConfirmOnDeleteFile, AutoResumeInterrupted, AutoRetryCount);
+        Save(folder, fragments, quality, showDialog, closeToTray, startWithWindows, MaximumConcurrentDownloads, MaximumDownloadRateKBps, ClipboardMonitorEnabled, OrganizeDownloadsByType, ShowCompleteDialog, PlaySoundOnComplete, ConfirmOnDeleteFile, AutoResumeInterrupted, AutoRetryCount);
     }
 
     public static void Save(string folder, int fragments, string quality, bool showDialog, bool closeToTray, bool startWithWindows, int maximumConcurrentDownloads, int maximumDownloadRateKBps, bool clipboardMonitorEnabled, bool organizeDownloadsByType)
     {
-        Save(folder, fragments, quality, showDialog, closeToTray, startWithWindows, maximumConcurrentDownloads, maximumDownloadRateKBps, clipboardMonitorEnabled, organizeDownloadsByType, ShowCompleteDialog, PlaySoundOnComplete, ConfirmOnRemove, ConfirmOnDeleteFile, AutoResumeInterrupted, AutoRetryCount);
+        Save(folder, fragments, quality, showDialog, closeToTray, startWithWindows, maximumConcurrentDownloads, maximumDownloadRateKBps, clipboardMonitorEnabled, organizeDownloadsByType, ShowCompleteDialog, PlaySoundOnComplete, ConfirmOnDeleteFile, AutoResumeInterrupted, AutoRetryCount);
     }
 }

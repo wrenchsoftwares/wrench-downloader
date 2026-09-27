@@ -130,7 +130,6 @@ public sealed partial class SettingsWindow : Window
 
             ShowCompleteDialogCheck.IsChecked = SettingsHelper.ShowCompleteDialog;
             PlaySoundCheck.IsChecked = SettingsHelper.PlaySoundOnComplete;
-            ConfirmRemoveCheck.IsChecked = SettingsHelper.ConfirmOnRemove;
             ConfirmDeleteCheck.IsChecked = SettingsHelper.ConfirmOnDeleteFile;
             AutoResumeCheck.IsChecked = SettingsHelper.AutoResumeInterrupted;
 
@@ -213,7 +212,6 @@ public sealed partial class SettingsWindow : Window
         ShowCompleteDialogCheck.Content = AppLocalization.Get("settings.showCompleteDialog");
         PlaySoundCheck.Content = AppLocalization.Get("settings.playSound");
         ConfirmationsHeader.Text = AppLocalization.Get("settings.confirmationsHeader");
-        ConfirmRemoveCheck.Content = AppLocalization.Get("settings.confirmRemove");
         ConfirmDeleteCheck.Content = AppLocalization.Get("settings.confirmDeleteFile");
         StartupHeader.Text = AppLocalization.Get("settings.startupHeader");
         AutoResumeCheck.Content = AppLocalization.Get("settings.autoResume");
@@ -294,7 +292,6 @@ public sealed partial class SettingsWindow : Window
         bool organize = OrganizeCheck.IsChecked == true;
         bool showComplete = ShowCompleteDialogCheck.IsChecked == true;
         bool playSound = PlaySoundCheck.IsChecked == true;
-        bool confirmRemove = ConfirmRemoveCheck.IsChecked == true;
         bool confirmDelete = ConfirmDeleteCheck.IsChecked == true;
         bool autoResume = AutoResumeCheck.IsChecked == true;
 
@@ -308,7 +305,7 @@ public sealed partial class SettingsWindow : Window
         SettingsHelper.Save(FolderBox.Text, fragments, quality, showDialog,
             closeToTray, startWithWindows, maximumDownloads, maxRate,
             clipboard, organize, showComplete, playSound,
-            confirmRemove, confirmDelete, autoResume, autoRetry);
+            confirmDelete, autoResume, autoRetry);
         SettingsHelper.SaveTheme(SelectedTheme());
         SettingsHelper.SaveLanguage((LanguageBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "en");
         WasSaved = true;

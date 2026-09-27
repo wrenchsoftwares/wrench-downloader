@@ -105,6 +105,19 @@ public class DownloadEngine
                lower.Contains("/manifest/");
     }
 
+    private static bool IsCapturedYouTubePlaybackUrl(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return false;
+        try
+        {
+            var uri = new Uri(url);
+            return uri.Host.EndsWith("googlevideo.com", StringComparison.OrdinalIgnoreCase) &&
+                   uri.AbsolutePath.EndsWith("/videoplayback", StringComparison.OrdinalIgnoreCase) &&
+                   !string.IsNullOrWhiteSpace(System.Web.HttpUtility.ParseQueryString(uri.Query)["itag"]);
+        }
+        catch { return false; }
+    }
+
     private static bool IsStreamingSite(DownloadItem item)
     {
         if (item == null || string.IsNullOrWhiteSpace(item.Url)) return false;
@@ -402,12 +415,15 @@ public class DownloadEngine
         bool isManifestUrl = IsManifestUrl(item.Url);
         if (!string.IsNullOrWhiteSpace(item.PageUrl) &&
             !item.PageUrl.Equals(item.Url, StringComparison.OrdinalIgnoreCase) &&
-            (item.DownloadPlaylist || isSubOrAudio || isManifestUrl) &&
+            (item.DownloadPlaylist || isSubOrAudio || isManifestUrl || IsCapturedYouTubePlaybackUrl(item.Url)) &&
             !string.Equals(item.Quality, "audio", StringComparison.OrdinalIgnoreCase) &&
             !string.Equals(item.Quality, "file", StringComparison.OrdinalIgnoreCase))
         {
-            // Resolve the page first so yt-dlp can select the requested quality instead of
-            // being limited to the rendition that happened to be playing in the browser.
+            // Resolve the source page first for manifests and captured YouTube
+            // renditions. The prompt still shows the exact browser stream URL;
+            // yt-dlp uses the page context to merge the matching video and audio
+            // tracks at the requested quality instead of saving a video-only
+            // Googlevideo response as an MP4.
             candidateUrls.Add(item.PageUrl);
             if (!string.IsNullOrWhiteSpace(item.Url)) candidateUrls.Add(item.Url);
         }

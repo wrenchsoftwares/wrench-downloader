@@ -168,8 +168,10 @@ chrome.webRequest.onHeadersReceived.addListener(
     const isAudioTrack = itagAudio || contentType.startsWith("audio/") ||
       url.includes("/mp4a/") || url.includes("/audio/") || url.includes("/aac/") ||
       url.match(/\.(mp3|aac|m4a|ogg|opus)($|\?)/i) || url.match(/[-_]audio(\.|\/|$)/i);
-    const isHls = url.includes(".m3u8") || contentType.includes("mpegurl") || contentType.includes("application/x-mpegurl");
-    const isDash = url.includes(".mpd") || contentType.includes("dash+xml");
+    // Extension-less manifests classify by path markers (see isManifestUrl).
+    const manifestKind = isManifestUrl(url) ? manifestType(url) : "";
+    const isHls = manifestKind === "hls" || url.includes(".m3u8") || contentType.includes("mpegurl") || contentType.includes("application/x-mpegurl");
+    const isDash = manifestKind === "dash" || url.includes(".mpd") || contentType.includes("dash+xml");
     const isVideo = contentType.startsWith("video/") || url.match(/\.(mp4|webm|mkv|m4v|mov|avi)($|\?)/i) ||
       (itagHeight > 0 && !itagAudio);
 
@@ -212,11 +214,13 @@ chrome.webRequest.onBeforeRequest.addListener(
       return;
     }
 
-    if (url.includes(".m3u8") || url.includes(".mpd")) {
+    if (isManifestUrl(url)) {
+      const kind = manifestType(url);
       addDetectedMedia(details.tabId, {
         url: url,
         title: guessTitle(url),
-        type: url.includes(".mpd") ? "dash" : "hls",
+        type: kind,
+        quality: "",
         size: "",
         time: Date.now()
       });
@@ -228,9 +232,11 @@ chrome.webRequest.onBeforeRequest.addListener(
 function guessTitle(url) {
   try {
     const urlObj = new URL(url);
-    // Rendition-id stream URLs carry no filename; the content script replaces
-    // this with the real video title once it associates the stream.
-    if (/videoplayback/i.test(urlObj.pathname)) return "Video";
+    // Rendition-id stream URLs and extension-less manifests carry no
+    // filename; the content script replaces this with the real video title
+    // once it associates the stream.
+    if (/videoplayback|hls_playlist|hls_variant/i.test(urlObj.pathname) ||
+        /manifest/i.test(urlObj.pathname + urlObj.hostname)) return "Video";
     // 1. Check common query parameter names used by file download mirrors (e.g. slug=win64.exe.zip, file=..., filename=...)
     for (const param of ["slug", "file", "filename", "name", "title"]) {
       const val = urlObj.searchParams.get(param);
@@ -253,6 +259,21 @@ function guessTitle(url) {
   } catch (e) {}
 
   return "Download";
+}
+
+// Extension-less manifests (IDM's bread and butter): master/media playlist
+// URLs with no .m3u8/.mpd in them, e.g. manifest.googlevideo.com HLS masters.
+// Matched structurally by playlist path markers, never by site name.
+function isManifestUrl(u) {
+  const s = String(u || "").toLowerCase();
+  return s.includes(".m3u8") || s.includes(".mpd") ||
+    s.includes("hls_playlist") || s.includes("hls_variant") ||
+    s.includes("manifest.googlevideo.com") || /\/manifest\//.test(s);
+}
+
+function manifestType(u) {
+  const s = String(u || "").toLowerCase();
+  return (s.includes(".mpd") || /\/manifest\/dash/.test(s)) ? "dash" : "hls";
 }
 
 // Rendition-id table: stream URLs carrying ?itag=N& identify the exact bytes

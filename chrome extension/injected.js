@@ -7,6 +7,19 @@
 
   const capturedUrls = new Set();
 
+  // Playlist/manifest URL markers incl. extension-less masters
+  // (manifest.googlevideo.com HLS/DASH endpoints carry no .m3u8/.mpd).
+  function looksLikeManifest(u) {
+    if (!u || typeof u !== "string") return false;
+    return u.includes(".m3u8") || u.includes(".mpd") || u.includes("playlist") ||
+      u.includes("master") || u.includes("hls_variant") ||
+      u.includes("manifest.googlevideo.com") || /\/manifest\//i.test(u);
+  }
+
+  function manifestKind(u) {
+    return (/\.mpd|\/manifest\/dash/i.test(u || "")) ? "dash" : "hls";
+  }
+
   function notifyStream(url, type, extra) {
     if (!url || typeof url !== "string") return;
     if (
@@ -57,8 +70,8 @@
       const input = args[0];
       const url = typeof input === "string" ? input : (input && input.url ? input.url : "");
       
-      if (url && (url.includes(".m3u8") || url.includes(".mpd") || url.includes("playlist") || url.includes("master"))) {
-        notifyStream(url, url.includes(".mpd") ? "dash" : "hls");
+      if (looksLikeManifest(url)) {
+        notifyStream(url, manifestKind(url));
       }
 
       try {
@@ -87,8 +100,8 @@
 
     XMLHttpRequest.prototype.open = function (method, url, ...rest) {
       this._wrenchUrl = url;
-      if (typeof url === "string" && (url.includes(".m3u8") || url.includes(".mpd") || url.includes("master") || url.includes("playlist"))) {
-        notifyStream(url, url.includes(".mpd") ? "dash" : "hls");
+      if (looksLikeManifest(url)) {
+        notifyStream(url, manifestKind(url));
       }
       return origOpen.apply(this, [method, url, ...rest]);
     };

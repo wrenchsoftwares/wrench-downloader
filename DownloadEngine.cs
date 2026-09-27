@@ -90,6 +90,21 @@ public class DownloadEngine
     // looks like a stream (manifest/playlist/chunk) or a page (no static
     // file extension). Anything else downloads directly; if the server
     // answers with a stream content-type we re-route (see DownloadDirectHttpAsync).
+    // NOTE: playlist endpoints often carry no file extension at all
+    // (manifest.googlevideo.com HLS masters etc.) - matched by path markers.
+    private static bool IsManifestUrl(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return false;
+        string lower = url.ToLowerInvariant();
+        return lower.Contains(".m3u8") ||
+               lower.Contains(".mpd") ||
+               lower.Contains(".m3u") ||
+               lower.Contains("hls_playlist") ||
+               lower.Contains("hls_variant") ||
+               lower.Contains("manifest.googlevideo.com") ||
+               lower.Contains("/manifest/");
+    }
+
     private static bool IsStreamingSite(DownloadItem item)
     {
         if (item == null || string.IsNullOrWhiteSpace(item.Url)) return false;
@@ -104,10 +119,7 @@ public class DownloadEngine
         string lower = url.ToLowerInvariant();
 
         // 1. Stream manifests, playlists, and chunk endpoints
-        if (lower.Contains(".m3u8") || 
-            lower.Contains(".mpd") || 
-            lower.Contains(".m3u") || 
-            lower.Contains("/manifest") ||
+        if (IsManifestUrl(url) ||
             lower.Contains("/master") ||
             lower.Contains("/playlist") ||
             lower.Contains("/videoplayback") ||
@@ -148,8 +160,7 @@ public class DownloadEngine
 
     private static async Task DownloadStreamingSiteAsync(DownloadItem item, string downloadsFolder, CancellationToken cancellationToken)
     {
-        bool isDirectManifest = item.Url.Contains(".m3u8", StringComparison.OrdinalIgnoreCase) ||
-                                item.Url.Contains(".mpd", StringComparison.OrdinalIgnoreCase);
+        bool isDirectManifest = IsManifestUrl(item.Url);
 
         item.Status = DownloadStatus.Downloading;
         item.StatusText = AppLocalization.Get(isDirectManifest ? "download.connectingStream" : "download.extracting");
@@ -388,7 +399,7 @@ public class DownloadEngine
                              item.Url.Contains("/aac/", StringComparison.OrdinalIgnoreCase) ||
                              item.Url.Contains("chunklist", StringComparison.OrdinalIgnoreCase));
 
-        bool isManifestUrl = Regex.IsMatch(item.Url, @"\.(m3u8|mpd)(?:[?#]|$)", RegexOptions.IgnoreCase);
+        bool isManifestUrl = IsManifestUrl(item.Url);
         if (!string.IsNullOrWhiteSpace(item.PageUrl) &&
             !item.PageUrl.Equals(item.Url, StringComparison.OrdinalIgnoreCase) &&
             (item.DownloadPlaylist || isSubOrAudio || isManifestUrl) &&
@@ -906,7 +917,8 @@ public class DownloadEngine
             string contentType = response.Content.Headers.ContentType?.MediaType?.ToLowerInvariant() ?? "";
             string rawName = Path.GetFileName(new Uri(item.Url).AbsolutePath).ToLowerInvariant();
 
-            if (contentType.Contains("mpegurl") || 
+            if (IsManifestUrl(item.Url) ||
+                contentType.Contains("mpegurl") || 
                 contentType.Contains("m3u") || 
                 contentType.Contains("dash+xml") ||
                 rawName.EndsWith(".m3u8") || 

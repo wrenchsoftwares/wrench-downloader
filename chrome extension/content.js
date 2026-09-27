@@ -359,12 +359,15 @@
   // (generic pipeline continues below in getGenericVideoItems)
 
   // Media URLs seen by THIS page's network activity (behind blob: players).
+  // Includes extension-less playlist endpoints (manifest.googlevideo.com
+  // HLS masters etc.) that never match a file-extension filter.
   function collectPerfMediaUrls() {
     try {
       return (performance.getEntriesByType("resource") || [])
         .map(r => r.name)
         .filter(u => typeof u === "string" && (
           /\.m3u8($|\?)/i.test(u) || /\.mpd($|\?)/i.test(u) ||
+          /hls_playlist|hls_variant|manifest\.googlevideo\.com|\/manifest\//i.test(u) ||
           /\.(mp4|webm|mov)($|\?)/i.test(u)));
     } catch (e) { return []; }
   }
@@ -405,12 +408,14 @@
   function isMasterLike(u) {
     if (!u || typeof u !== "string") return false;
     if (isAudioTrack(u) || isVideoTrackOnly(u)) return false;
-    return /master|playlist|manifest|\/pl\/[^\/]+\.m3u8/i.test(u) || (u.includes(".m3u8") && u.includes("tag="));
+    // Media playlists are never masters, even on manifest hosts.
+    if (/hls_variant/i.test(u)) return false;
+    return /master|playlist|manifest|hls_playlist|\/pl\/[^\/]+\.m3u8/i.test(u) || (u.includes(".m3u8") && u.includes("tag="));
   }
 
   function isRenditionLike(u) {
     if (!u || typeof u !== "string") return false;
-    return isAudioTrack(u) || isVideoTrackOnly(u) || /chunklist|index-v\d|rendition|media_|-a\d+(\.m3u8|$)/i.test(u);
+    return isAudioTrack(u) || isVideoTrackOnly(u) || /chunklist|index-v\d|rendition|media_|hls_variant|-a\d+(\.m3u8|$)/i.test(u);
   }
 
   function scoreStreamUrl(u) {
@@ -581,13 +586,17 @@
   // tokens, unlike re-resolved or stale captured links.
   function collectPageEmbeddedMedia() {
     const found = [];
+    const isManifest = (u) => /hls_playlist|hls_variant|manifest\.googlevideo\.com|\/manifest\//i.test(u || "");
     const push = (url, weight) => {
       if (found.length > 40 || !url || typeof url !== "string") return;
       url = url.trim().replace(/\\u0026/g, "&").replace(/\\\//g, "/").replace(/&amp;/g, "&");
       if (!/^https?:\/\//i.test(url) || url.length > 1500) return;
-      if (!/\.(mp4|webm|mkv|m3u8|mpd|mov)(\?|#|$)/i.test(url)) return;
+      // Extension-less playlist endpoints (player configs carry complete
+      // HLS/DASH masters with auth params, e.g. hlsManifestUrl).
+      const manifest = isManifest(url);
+      if (!manifest && !/\.(mp4|webm|mkv|m3u8|mpd|mov)(\?|#|$)/i.test(url)) return;
       if (/preview|thumb|poster|sprite|storyboard|\/ads?\//i.test(url)) return;
-      if (!found.some(f => f.url === url)) found.push({ url, weight: weight || 0 });
+      if (!found.some(f => f.url === url)) found.push({ url, weight: weight || 0, manifest });
     };
 
     // High-signal tags first
@@ -605,11 +614,15 @@
     // Quoted media URLs inside inline scripts (player configs / mediaDefinitions)
     try {
       const re = /"(https?:\/\/[^"\\\s]+?\.(?:mp4|webm|mkv|m3u8|mpd|mov)(?:\?[^"\\\s]*)?)"|'(https?:\/\/[^'\\\s]+?\.(?:mp4|webm|mkv|m3u8|mpd|mov)(?:\?[^'\\\s]*)?)'/gi;
+      // Extension-less HLS/DASH masters (hlsManifestUrl and friends).
+      const reManifest = /"(https?:\/\/(?:manifest\.googlevideo\.com[^"\\\s]*|[^"\\\s]*hls_playlist[^"\\\s]*|[^"\\\s]*\/manifest\/[^"\\\s]*))"/gi;
       document.querySelectorAll("script:not([src])").forEach(s => {
         const t = s.textContent || "";
         if (!t || t.length > 500000) return;
         let m;
         while ((m = re.exec(t)) !== null) push(m[1] || m[2], 5);
+        let mm;
+        while ((mm = reManifest.exec(t)) !== null) push(mm[1], 9);
       });
     } catch (e) {}
 
@@ -650,10 +663,12 @@
     const embedded = collectPageEmbeddedMedia();
     embedded.forEach(e => {
       if (!uniqueMap.has(e.url)) {
+        const embType = /\.(mpd)(\?|#|$)/i.test(e.url) || /\/manifest\/dash/i.test(e.url) ? "dash"
+          : (/\.(m3u8)(\?|#|$)/i.test(e.url) || e.manifest ? "hls" : "video");
         uniqueMap.set(e.url, {
           url: e.url,
           title: title,
-          type: /\.(mpd)(\?|#|$)/i.test(e.url) ? "dash" : (/\.(m3u8)(\?|#|$)/i.test(e.url) ? "hls" : "video"),
+          type: embType,
           referer: postPageUrl,
           userAgent: navigator.userAgent,
           embeddedWeight: e.weight,
@@ -808,12 +823,14 @@
           coveredByStream = true;
         } else {
           // No advertised qualities: offer only the rendition confirmed by
-          // playback metadata.
+          // playback metadata. Masters carry their own URL (exact manifest,
+          // IDM-style dialog); track/media playlists resolve via the page so
+          // the app merges full audio+video instead of a silent track.
           const res = getResolutionFromVideo(video);
           if (res) {
-            const downloadUrl = (isRenditionLike(streamItem.url) && postPageUrl)
-              ? postPageUrl
-              : streamItem.url;
+            const downloadUrl = (isMasterLike(streamItem.url) || !postPageUrl)
+              ? streamItem.url
+              : (isRenditionLike(streamItem.url) ? postPageUrl : streamItem.url);
             items.push({
               displayName: `${title} - ${res.label}.mp4`,
               title: `${title} - ${res.label}`,

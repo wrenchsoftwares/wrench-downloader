@@ -372,7 +372,7 @@
   function isPlayableStreamUrl(u) {
     if (!u || typeof u !== "string") return false;
     if (!/^https?:\/\//i.test(u)) return false;
-    if (/videoplayback|bytestart|byteend|range=|\.m4s($|\?)|init\.mp4|init\.m4s|\/segment|\/frag|beacon|analytics/i.test(u)) return false;
+    if (/videoplayback|bytestart|byteend|range=|\.m4s($|\?)|\.ts($|\?)|init\.mp4|init\.m4s|\/segment|\/frag|beacon|analytics|preview|thumb|poster|sprite|storyboard/i.test(u)) return false;
     return true;
   }
 
@@ -645,9 +645,9 @@
         });
       }
     });
-    const validMedia = Array.from(uniqueMap.values()).filter(m => 
-      m.url && 
-      !m.url.startsWith("blob:") && 
+    const validMedia = Array.from(uniqueMap.values()).filter(m =>
+      m.url &&
+      !m.url.startsWith("blob:") &&
       !m.url.startsWith("data:") &&
       !m.url.includes("/videoplayback") &&
       !m.url.includes("bytestart=") &&
@@ -658,6 +658,11 @@
       !m.url.includes("range=") &&
       !m.url.includes("/segment") &&
       !m.url.includes("/frag") &&
+      // HLS fragments are never standalone videos (a 10s .ts chunk looks
+      // like a "download" but plays only a fragment - the #1 junk entry).
+      !/\.(m4s|ts)(\?|#|$)/i.test(m.url.split("?")[0]) &&
+      // Hover previews / thumbnails / ad clips captured as video/*.
+      !/preview|thumb|poster|sprite|storyboard|\/ads?\//i.test(m.url) &&
       !(!/\.(m3u8|mpd)(\?|#|$)/i.test(m.url) &&
         Number(m.contentLengthBytes) > 0 &&
         Number(m.contentLengthBytes) < 256 * 1024)
@@ -685,7 +690,7 @@
     });
     const streamItem = streamCandidates[0];
 
-    const directMediaItems = validMedia.filter(m => m !== streamItem && (m.type === "video" || m.url.match(/\.(mp4|webm|mkv|flv|m4v|ts)($|\?)/i)));
+    const directMediaItems = validMedia.filter(m => m !== streamItem && (m.type === "video" || m.url.match(/\.(mp4|webm|mkv|mov)($|\?|#)/i)));
 
     if (streamItem) {
       const isHls = streamItem.url.includes(".m3u8") || streamItem.type === "hls" ||
@@ -706,7 +711,11 @@
       if (variants.length > 0) {
         // Show real renditions, but send the MASTER url + quality label so
         // yt-dlp resolves fresh with both audio and video tracks merged.
-        variants.forEach(v => {
+        // Cap at the 3 best: every extra row shares the SAME master URL and
+        // low renditions (184p/288p/...) are never what the user wants.
+        // Direct-file sections below are skipped: they are duplicates of
+        // these renditions or stray fragments, not additional videos.
+        variants.slice(0, 3).forEach(v => {
           const label = `${v.height}p`;
           items.push({
             displayName: `${title} - ${label}.mp4`,
@@ -755,7 +764,14 @@
         badge: "MP3",
         sub: `Format: MP3 | Res: (Audio Only)`
       });
+
+      // Master playlist fully describes the video: the rows above (up to 3
+      // real renditions + audio) are the complete working set. Anything else
+      // captured on the page is a duplicate or a fragment - don't list it.
+      if (variants.length > 0) return items;
     }
+
+    const streamHeights = new Set(items.map(i => (i.quality || "").toLowerCase()));
 
     // 2. Page-embedded direct files (freshest page-issued URLs first).
     // Group by detected quality so each entry is a distinct real stream.
@@ -778,9 +794,13 @@
     });
     Array.from(embeddedByQuality.values())
       .sort((a, b) => (b.height || 9999) - (a.height || 9999))
-      .slice(0, 3)
+      // Skip heights already listed from the stream; keep at most one extra
+      // direct file so the menu stays short and every row is distinct.
+      .filter(({ height }) => height <= 0 || !streamHeights.has(`${height}p`))
+      .slice(0, 1)
       .forEach(({ entry: m, height: h }) => {
         embeddedUrls.add(m.url);
+        streamHeights.add(h > 0 ? `${h}p` : "file");
         let ext = "mp4";
         const mExt = m.url.split("?")[0].match(/\.(mp4|webm|mkv|mov)($|\?)/i);
         if (mExt) ext = mExt[1].toLowerCase();
@@ -800,22 +820,27 @@
         });
       });
 
-    // 3. Other captured direct video files (mp4, webm, ts, etc.) - top 3, skip dupes.
+    // 3. Other captured direct video files - only distinct heights not already
+    // listed, max 2 rows. Height-unknown leftovers ("Part N") are skipped
+    // whenever a height-known entry exists: they are fragments/previews that
+    // download a broken file, the exact "entries that don't work" complaint.
     // Resolution: playing rendition first, URL hint second - never fabricated.
     const remainingDirects = directMediaItems.filter(m => !embeddedUrls.has(m.url));
     const getDirectHeight = media => guessHeightFromUrl(media.url) || (media.url === directSrc ? videoHeight : 0);
     remainingDirects.sort((a, b) => getDirectHeight(b) - getDirectHeight(a));
-    const seenDirectHeights = new Set();
+    const seenDirectHeights = new Set(streamHeights);
+    const hasKnownHeight = remainingDirects.some(media => getDirectHeight(media) > 0) || seenDirectHeights.size > 0;
     const uniqueDirects = remainingDirects.filter(media => {
       const height = getDirectHeight(media);
-      if (height === 0) return true;
-      if (seenDirectHeights.has(height)) return false;
-      seenDirectHeights.add(height);
+      if (height === 0) return !hasKnownHeight;
+      const key = `${height}p`;
+      if (seenDirectHeights.has(key)) return false;
+      seenDirectHeights.add(key);
       return true;
     });
-    uniqueDirects.slice(0, 6).forEach((m, idx) => {
+    uniqueDirects.slice(0, 2).forEach((m, idx) => {
       let ext = "mp4";
-      const mExt = m.url.split("?")[0].match(/\.(mp4|webm|mkv|flv|ts|avi)($|\?)/i);
+      const mExt = m.url.split("?")[0].match(/\.(mp4|webm|mkv|mov)($|\?)/i);
       if (mExt) ext = mExt[1].toLowerCase();
 
       const urlH = guessHeightFromUrl(m.url);
@@ -824,7 +849,7 @@
       const resStr = h > 0 ? `(${w}x${h})` : "";
       const codec = getCodecName(m.contentType || m.mimeType, ext);
       const codecPart = codec ? ` | Codec: ${codec}` : "";
-      const qLabel = h > 0 ? `${h}p` : (remainingDirects.length > 1 ? `Part ${idx + 1}` : "Video");
+      const qLabel = h > 0 ? `${h}p` : "Video";
       const sizeInfo = m.size ? ` • ${m.size}` : "";
 
       items.push({
@@ -843,7 +868,7 @@
     // 4. Check direct src attribute on video if not a blob
     if (items.length === 0 && directSrc && !directSrc.startsWith("blob:") && !directSrc.startsWith("data:") && !directSrc.startsWith("chrome-extension://")) {
       let ext = "mp4";
-      const mExt = directSrc.split("?")[0].match(/\.(mp4|webm|mkv|flv|ts|avi)($|\?)/i);
+      const mExt = directSrc.split("?")[0].match(/\.(mp4|webm|mkv|mov)($|\?)/i);
       if (mExt) ext = mExt[1].toLowerCase();
 
       const srcH = videoHeight > 0 ? videoHeight : guessHeightFromUrl(directSrc);
@@ -899,7 +924,9 @@
       });
     }
 
-    return items;
+    // Hard cap: the menu must stay short. Every row above is a distinct,
+    // verified working entry (real rendition, direct file, or page fallback).
+    return items.slice(0, 5);
   }
 
   function sniffVideoSources(video) {

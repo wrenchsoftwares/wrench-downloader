@@ -63,6 +63,7 @@ chrome.webRequest.onHeadersReceived.addListener(
 
     // Ignore chunked video fragments / ping requests to avoid cluttering dropdown.
     // Generic URL patterns only - no per-site rules.
+    // (.ts = HLS fragments: a 10s chunk that plays only a fragment, never the video.)
     if (
       url.includes("/videoplayback") ||
       url.includes("/segment") ||
@@ -73,6 +74,8 @@ chrome.webRequest.onHeadersReceived.addListener(
       url.includes(".m4s") ||
       url.includes("init.mp4") ||
       url.includes("init.m4s") ||
+      /\.ts($|\?|#)/i.test(url) ||
+      /preview|thumb|poster|sprite|storyboard|\/ads?\//i.test(url) ||
       url.endsWith(".key") ||
       url.includes("beacon") ||
       url.includes("analytics")
@@ -109,7 +112,7 @@ chrome.webRequest.onHeadersReceived.addListener(
       url.match(/\.(mp3|aac|m4a|ogg|opus)($|\?)/i) || url.match(/[-_]audio(\.|\/|$)/i);
     const isHls = url.includes(".m3u8") || contentType.includes("mpegurl") || contentType.includes("application/x-mpegurl");
     const isDash = url.includes(".mpd") || contentType.includes("dash+xml");
-    const isVideo = contentType.startsWith("video/") || url.match(/\.(mp4|webm|mkv|flv|m4v|mov|avi|ts)($|\?)/i);
+    const isVideo = contentType.startsWith("video/") || url.match(/\.(mp4|webm|mkv|m4v|mov|avi)($|\?)/i);
 
     if (isHls || isDash || isVideo || isAudioTrack) {
       const headers = requestHeadersMap.get(url) || {};
@@ -326,16 +329,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const tabId = sender.tab ? sender.tab.id : message.tabId;
 
   if (message.action === "GET_MEDIA") {
-    let items = (tabId && mediaByTab.get(tabId)) || [];
-    // If empty for this tab, check if there's any recent stream across tabs
-    if (items.length === 0) {
-      for (const [tId, tItems] of mediaByTab.entries()) {
-        if (tItems && tItems.length > 0) {
-          items = tItems;
-          break;
-        }
-      }
-    }
+    // Only this tab's streams: leaking another tab's media here produced
+    // dropdown rows whose URLs don't match the current video (rows that fail).
+    const items = (tabId && mediaByTab.get(tabId)) || [];
     sendResponse({ media: items });
     return true;
   }

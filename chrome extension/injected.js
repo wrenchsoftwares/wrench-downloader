@@ -17,6 +17,8 @@
       url.includes("bytestart=") ||
       url.includes("byteend=") ||
       url.includes(".m4s") ||
+      /\.ts($|\?|#)/i.test(url) ||
+      /preview|thumb|poster|sprite|storyboard|\/ads?\//i.test(url) ||
       url.includes("init.mp4") ||
       url.includes("init.m4s")
     ) {
@@ -33,7 +35,7 @@
       url.includes(".mpd") || 
       url.includes("master.") ||
       url.includes("playlist.") ||
-      url.match(/\.(mp4|webm|mkv|flv|m4v|mov|avi|ts)($|\?)/i) ||
+      url.match(/\.(mp4|webm|mkv|m4v|mov|avi)($|\?)/i) ||
       resolvedType === "hls" || resolvedType === "dash" || resolvedType === "video" || resolvedType === "audio";
 
     if (isStream && !capturedUrls.has(url)) {

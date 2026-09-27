@@ -95,10 +95,21 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
 
       listEl.innerHTML = "";
+      // Same junk rules as the page dropdown: fragments (.ts), previews and
+      // tiny files never play the video - hide them instead of listing rows
+      // that fail. Dedupe and cap so the popup stays short and actionable.
+      const seenPopup = new Set();
       const media = response.media.filter(item => {
-        const isManifest = item.type === "hls" || item.type === "dash" || /\.(m3u8|mpd)(\?|$)/i.test(item.url);
-        return isManifest || !item.contentLengthBytes || item.contentLengthBytes >= 256 * 1024;
-      });
+        const u = item.url || "";
+        if (/\.ts($|\?|#)/i.test(u)) return false;
+        if (/preview|thumb|poster|sprite|storyboard|\/ads?\//i.test(u)) return false;
+        const isManifest = item.type === "hls" || item.type === "dash" || /\.(m3u8|mpd)(\?|$)/i.test(u);
+        if (!isManifest && item.contentLengthBytes && item.contentLengthBytes < 256 * 1024) return false;
+        const key = (isManifest ? "m:" : "f:") + (guessQualityTag(u) || u.split("?")[0].slice(-80));
+        if (seenPopup.has(key)) return false;
+        seenPopup.add(key);
+        return true;
+      }).slice(0, 5);
       if (media.length === 0) {
         renderPageFallback();
         return;

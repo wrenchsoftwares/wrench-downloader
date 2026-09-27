@@ -89,3 +89,20 @@ Use the root push scripts to commit and sync changes directly to `origin main`:
 # Or via PowerShell
 .\push.ps1 "Commit message"
 ```
+
+### Standing rule: publishing a branch ALWAYS ships the installer
+Whenever the user says "publish branch" / "release <version>", all of these
+happen, in order — never just the branch push:
+1. Commit pending work on `main`, create the `<version>` branch, push it.
+2. Run `.\release-installer.ps1` and verify `artifacts/stage/<version>/`
+   contains `WrenchDownloader.exe`, `Assets/AppIcon.ico` (tray icon), and
+   `chrome extension/manifest.json`, with no `portable.mode`.
+3. Attach the installer to its GitHub Release (tag `<version>`):
+   `gh release create <version> --title "Wrench Downloader <version>" --notes ... "artifacts/releases/<version>/WrenchDownloader-<version>-Setup.exe"`
+   (or `gh release upload <version> ... --clobber` if the release exists).
+4. Bump `main` to the next version (csproj, extension `manifest.json`,
+   `Package.appxmanifest`, `installer/app.iss`, in-app strings, README),
+   commit, and push.
+5. CI (`.github/workflows/release-installer.yml`) repeats steps 2–3
+   automatically on every future version-branch push; the local run above is
+   still required so the installer is verified before pushing.

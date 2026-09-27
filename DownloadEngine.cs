@@ -346,27 +346,16 @@ public class DownloadEngine
             argsBuilder.Append($"--user-agent \"{item.UserAgent}\" ");
         }
 
-        // Browser-minted PO token (harvested by the extension from the playing
-        // tab's own stream requests): proves a genuine client for the player
-        // and download requests. Sanitized to token characters only.
-        if (!string.IsNullOrWhiteSpace(item.PoToken) &&
-            (PotProviderHelper.IsYouTubeUrl(item.Url) || PotProviderHelper.IsYouTubeUrl(item.PageUrl)))
-        {
-            string token = Regex.Replace(item.PoToken.Trim(), @"[^A-Za-z0-9\-_]", "");
-            if (!string.IsNullOrEmpty(token))
-            {
-                argsBuilder.Append($"--extractor-args \"youtube:po_token=web.gvs+{token}\" ");
-                LogDiag(item, "browser-minted PO token attached");
-            }
-        }
-
         string commonArgs = argsBuilder.ToString();
 
-        // Live browser session from the extension: cookie-DB export fails
-        // while the browser runs (locked profile), but the extension reads
-        // its own tabs' cookies directly. Attaching them to every attempt
-        // opens age/logged-in gates exactly like browser-attached downloaders.
+        // Live browser session from the extension (cookies + browser-minted
+        // PO token). Lesson from 26.2.2: the FIRST attempt must look exactly
+        // like 26.2.2 (no session attached) because automation-exported
+        // sessions can trip bot walls that anonymous requests pass. The
+        // session is therefore held back as retry ammo for gated errors only
+        // (see the failure branch below), never baked into every attempt.
         string? extensionCookieFile = null;
+        string sessionCookieArgs = "";
         if (item.Cookies != null && item.Cookies.Count > 0)
         {
             string jarHostUrl = !string.IsNullOrWhiteSpace(item.PageUrl) ? item.PageUrl : item.Url;
@@ -374,8 +363,15 @@ public class DownloadEngine
             catch { extensionCookieFile = null; }
             if (extensionCookieFile != null)
             {
-                commonArgs += $"--cookies \"{extensionCookieFile}\" ";
-                LogDiag(item, $"browser session attached ({item.Cookies.Count} cookies)");
+                sessionCookieArgs = $"--cookies \"{extensionCookieFile}\" ";
+                if (!string.IsNullOrWhiteSpace(item.PoToken) &&
+                    (PotProviderHelper.IsYouTubeUrl(item.Url) || PotProviderHelper.IsYouTubeUrl(item.PageUrl)))
+                {
+                    string token = Regex.Replace(item.PoToken.Trim(), @"[^A-Za-z0-9\-_]", "");
+                    if (!string.IsNullOrEmpty(token))
+                        sessionCookieArgs += $"--extractor-args \"youtube:po_token=web.gvs+{token}\" ";
+                }
+                LogDiag(item, $"browser session ready ({item.Cookies.Count} cookies)");
             }
         }
         bool hasSessionJar = extensionCookieFile != null;
@@ -787,7 +783,8 @@ public class DownloadEngine
                 // already plays the same video - exactly how browser-attached
                 // downloaders get these files. Two phases, both error-driven
                 // (no site lists):
-                //  A. attach a session: plain -> chrome -> edge -> brave.
+                //  A. attach a session: live extension jar first, then
+                //     chrome -> edge -> brave export.
                 //  B. once an attempt carried a session yet still hit the
                 //     wall, keep the session and switch to an unchallenged
                 //     player client: web_safari (HLS needs no PO token),
@@ -795,17 +792,26 @@ public class DownloadEngine
                 // Skipped when cookie export itself is broken.
                 if (!cookiesFailed && IsGatedError(lastError))
                 {
-                    bool sessionAttached = hasSessionJar ||
-                        (attempt.CookieArgs?.Contains("cookies", StringComparison.OrdinalIgnoreCase) ?? false);
+                    bool sessionAttached = (attempt.CookieArgs?.Contains("cookies", StringComparison.OrdinalIgnoreCase) ?? false);
                     string? nextArgs = null;
                     if (!sessionAttached)
                     {
-                        string? nextBrowser = NextAuthBrowser(attempt.CookieArgs, attemptUrl, authBrowsersTried);
-                        if (nextBrowser != null)
+                        // Session options in order: live extension jar first
+                        // (fresh, proven in the tab), then browser export.
+                        if (hasSessionJar && authBrowsersTried.Add($"{attemptUrl}|extjar"))
                         {
-                            authBrowsersTried.Add($"{attemptUrl}|{nextBrowser}");
-                            LogDiag(item, $"gated content detected, retrying with {nextBrowser} session");
-                            nextArgs = $"--cookies-from-browser {nextBrowser} ";
+                            LogDiag(item, "gated content detected, retrying with extension session");
+                            nextArgs = sessionCookieArgs;
+                        }
+                        else
+                        {
+                            string? nextBrowser = NextAuthBrowser(attempt.CookieArgs, attemptUrl, authBrowsersTried);
+                            if (nextBrowser != null)
+                            {
+                                authBrowsersTried.Add($"{attemptUrl}|{nextBrowser}");
+                                LogDiag(item, $"gated content detected, retrying with {nextBrowser} session");
+                                nextArgs = $"--cookies-from-browser {nextBrowser} ";
+                            }
                         }
                     }
                     else if (PotProviderHelper.IsYouTubeUrl(item.Url) || PotProviderHelper.IsYouTubeUrl(item.PageUrl))
@@ -823,6 +829,30 @@ public class DownloadEngine
                         var rest = pendingUrls.ToList();
                         pendingUrls.Clear();
                         pendingUrls.Enqueue((attemptUrl, nextArgs));
+                        foreach (var p in rest) pendingUrls.Enqueue(p);
+                        item.Progress = 0;
+                        item.SavePath = "";
+                        item.EtaText = "--";
+                        item.StatusText = AppLocalization.Get("download.resolving");
+                        item.SpeedText = AppLocalization.Get("download.resolving");
+                        continue;
+                    }
+                }
+                // Client-variant chain continuation: a player_client attempt
+                // failed with anything (e.g. "format not available") - move to
+                // the next client instead of giving up. Bounded by tried-set.
+                if (!cookiesFailed &&
+                    (attempt.CookieArgs?.Contains("player_client", StringComparison.OrdinalIgnoreCase) ?? false) &&
+                    (PotProviderHelper.IsYouTubeUrl(item.Url) || PotProviderHelper.IsYouTubeUrl(item.PageUrl)))
+                {
+                    string? clientArgs = NextClientVariant(attempt.CookieArgs, attemptUrl, authBrowsersTried);
+                    if (clientArgs != null)
+                    {
+                        LogDiag(item, $"client variant failed, retrying {clientArgs.Trim()}");
+                        pendingUrls.Dequeue();
+                        var rest = pendingUrls.ToList();
+                        pendingUrls.Clear();
+                        pendingUrls.Enqueue((attemptUrl, clientArgs));
                         foreach (var p in rest) pendingUrls.Enqueue(p);
                         item.Progress = 0;
                         item.SavePath = "";

@@ -311,13 +311,25 @@ public class DownloadEngine
 
         string commonArgs = argsBuilder.ToString();
 
-        // Pornhub-style challenge sites: the page serves a JS challenge that
-        // yt-dlp can only solve via the legacy PhantomJS binary (node/deno do
-        // NOT substitute there), while captured CDN links are signed with a
-        // short TTL and die with 410 Gone. The reliable path is the source
-        // page combined with the browser's validated session (--cookies-from-
-        // browser reuses the challenge cookies your real browser already has).
-        bool isChallengeSite = IsChallengeSite(item);
+        // Some video pages gate playback behind an inline JS cookie-challenge
+        // in their HTML (a script sets a session cookie, then reloads) while
+        // captured CDN links are short-lived signed URLs that die with
+        // 410 Gone. yt-dlp can only clear that gate via the legacy PhantomJS
+        // binary (node/deno do NOT substitute there), so the reliable path is
+        // the source page combined with a solved or browser session.
+        // Detection is structural: the page HTML is probed for challenge
+        // markers (never matched by site name). Probing is skipped when there
+        // is no page URL, since the challenge can only live in page HTML.
+        string? challengeCookieFile = null;
+        if (!string.IsNullOrWhiteSpace(item.PageUrl))
+        {
+            try { challengeCookieFile = await ChallengeSolver.CreateCookieFileAsync(item.PageUrl, cancellationToken); }
+            catch { challengeCookieFile = null; }
+        }
+        bool isChallengePage = challengeCookieFile != null;
+        LogDiag(item, isChallengePage
+            ? "page cookie-challenge solved, session cookie ready"
+            : "no page cookie-challenge detected");
 
         // Captured stream URLs (signed HLS links) can expire (410 Gone) before
         // the download starts. Fall back to the source page, which yt-dlp re-resolves.
@@ -352,21 +364,14 @@ public class DownloadEngine
         }
 
         bool succeeded = false;
-        // Per-attempt plan: (url, extra yt-dlp args). Challenge sites always
-        // try the page first (fresh signed links beat stale captured ones):
-        // natively-solved session cookie first, browser session second,
+        // Per-attempt plan: (url, extra yt-dlp args). Challenge-gated pages
+        // always try the page first (fresh signed links beat stale captured
+        // ones): natively-solved session cookie first, browser session second,
         // plain third. The solved cookie is always fresh, unlike exported
         // browser cookies which may be stale or single-use.
-        string? challengeCookieFile = null;
         var plan = new List<(string Url, string? CookieArgs)>();
-        if (isChallengeSite)
+        if (isChallengePage)
         {
-            string? pageForSolve = !string.IsNullOrWhiteSpace(item.PageUrl) ? item.PageUrl : item.Url;
-            try { challengeCookieFile = await PornhubChallengeSolver.CreateCookieFileAsync(pageForSolve, cancellationToken); }
-            catch { challengeCookieFile = null; }
-            LogDiag(item, challengeCookieFile != null
-                ? "challenge solved, session cookie ready"
-                : "no challenge session (will try browser cookies)");
             if (!string.IsNullOrWhiteSpace(item.PageUrl))
             {
                 if (challengeCookieFile != null)
@@ -714,7 +719,7 @@ public class DownloadEngine
             break;
         }
         }
-        PornhubChallengeSolver.DeleteCookieFile(challengeCookieFile);
+        ChallengeSolver.DeleteCookieFile(challengeCookieFile);
     }
 
     private static async Task DownloadDirectHttpAsync(DownloadItem item, string downloadsFolder, CancellationToken cancellationToken)
@@ -1113,20 +1118,6 @@ public class DownloadEngine
     });
 
     private static string FindJsRuntimeArgs() => _cachedJsRuntimeArgs.Value;
-
-    /// <summary>
-    /// Sites whose pages sit behind a JS challenge (yt-dlp only solves it via
-    /// the legacy PhantomJS binary) and whose CDN links are short-lived signed
-    /// URLs. For these, the source page + browser session is the reliable path.
-    /// </summary>
-    private static bool IsChallengeSite(DownloadItem item)
-    {
-        string combined = $"{item.Url} {item.PageUrl} {item.Referrer}";
-        return combined.Contains("pornhub.com", StringComparison.OrdinalIgnoreCase)
-            || combined.Contains("pornhub.net", StringComparison.OrdinalIgnoreCase)
-            || combined.Contains("pornhub.org", StringComparison.OrdinalIgnoreCase)
-            || combined.Contains("pornhubpremium.com", StringComparison.OrdinalIgnoreCase);
-    }
 
     private static string? _cachedYtDlpVersion;
     private static string YtDlpVersion(string ytdlpPath)

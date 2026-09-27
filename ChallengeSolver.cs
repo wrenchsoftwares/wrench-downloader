@@ -23,13 +23,17 @@ public sealed class ChallengeDocument
 }
 
 /// <summary>
-/// Solves Pornhub-style JS challenge pages natively (no PhantomJS, no browser,
-/// no Node needed). The challenge is pure arithmetic that sets a session
-/// cookie; it is executed in a sandboxed Jint interpreter and the resulting
-/// cookie is written to a Netscape cookie jar for yt-dlp (--cookies).
-/// Returns the temp jar path, or null when there is no challenge / on failure.
+/// Solves inline JS cookie-challenge video pages natively (no PhantomJS, no
+/// browser, no Node needed). Some pages gate playback behind an HTML structure
+/// where an inline script sets a session cookie and then reloads
+/// (onload="go()" / document.cookie + location.reload markers). The challenge
+/// itself is pure arithmetic, so it is executed in a sandboxed Jint
+/// interpreter and the resulting cookie is written to a Netscape cookie jar
+/// for yt-dlp (--cookies).
+/// Returns the temp jar path, or null when the page HTML carries no challenge
+/// markers / on failure.
 /// </summary>
-public static class PornhubChallengeSolver
+public static class ChallengeSolver
 {
     private static readonly HttpClient _http = CreateHttpClient();
 

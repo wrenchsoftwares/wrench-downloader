@@ -676,6 +676,10 @@
         });
       }
     });
+    const isManifestEntry = (m) =>
+      m.type === "hls" || m.type === "dash" ||
+      /hls_playlist|hls_variant|manifest\.googlevideo\.com|\/manifest\/|\.m3u8(\?|#|$)|\.mpd(\?|#|$)/i.test(m.url || "") ||
+      (m.contentType && (m.contentType.includes("mpegurl") || m.contentType.includes("dash")));
     const validMedia = Array.from(uniqueMap.values()).filter(m =>
       m.url &&
       !m.url.startsWith("blob:") &&
@@ -695,7 +699,9 @@
       !/\.(m4s|ts)(\?|#|$)/i.test(m.url.split("?")[0]) &&
       // Hover previews / thumbnails / ad clips captured as video/*.
       !/preview|thumb|poster|sprite|storyboard|\/ads?\//i.test(m.url) &&
-      !(!/\.(m3u8|mpd)(\?|#|$)/i.test(m.url) &&
+      // Tiny-file rule applies to DIRECT files only: masters/playlists are
+      // legitimately a few KB (this rule used to eat IDM-style manifests).
+      !(!isManifestEntry(m) &&
         Number(m.contentLengthBytes) > 0 &&
         Number(m.contentLengthBytes) < 256 * 1024)
     );

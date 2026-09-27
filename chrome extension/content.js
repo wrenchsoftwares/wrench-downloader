@@ -587,6 +587,10 @@
   function collectPageEmbeddedMedia() {
     const found = [];
     const isManifest = (u) => /hls_playlist|hls_variant|manifest\.googlevideo\.com|\/manifest\//i.test(u || "");
+    // Page-issued rendition URLs: the player config carries the exact signed
+    // stream URLs (e.g. googlevideo videoplayback + itag) with fresh auth
+    // params. This is the IDM-equivalent capture: no page re-resolve needed.
+    const isPageRendition = (u) => /googlevideo\.com\/videoplayback[^"'\\\s]*[?&]itag=\d+/i.test(u || "");
     const push = (url, weight) => {
       if (found.length > 40 || !url || typeof url !== "string") return;
       url = url.trim().replace(/\\u0026/g, "&").replace(/\\\//g, "/").replace(/&amp;/g, "&");
@@ -594,7 +598,7 @@
       // Extension-less playlist endpoints (player configs carry complete
       // HLS/DASH masters with auth params, e.g. hlsManifestUrl).
       const manifest = isManifest(url);
-      if (!manifest && !/\.(mp4|webm|mkv|m3u8|mpd|mov)(\?|#|$)/i.test(url)) return;
+      if (!manifest && !isPageRendition(url) && !/\.(mp4|webm|mkv|m3u8|mpd|mov)(\?|#|$)/i.test(url)) return;
       if (/preview|thumb|poster|sprite|storyboard|\/ads?\//i.test(url)) return;
       if (!found.some(f => f.url === url)) found.push({ url, weight: weight || 0, manifest });
     };
@@ -611,18 +615,24 @@
       });
     } catch (e) {}
 
-    // Quoted media URLs inside inline scripts (player configs / mediaDefinitions)
+    // Quoted media URLs inside inline scripts (player configs / mediaDefinitions).
+    // Player responses can be megabytes (full streamingData), so the cap is
+    // generous here; patterns are linear scans.
     try {
       const re = /"(https?:\/\/[^"\\\s]+?\.(?:mp4|webm|mkv|m3u8|mpd|mov)(?:\?[^"\\\s]*)?)"|'(https?:\/\/[^'\\\s]+?\.(?:mp4|webm|mkv|m3u8|mpd|mov)(?:\?[^'\\\s]*)?)'/gi;
       // Extension-less HLS/DASH masters (hlsManifestUrl and friends).
       const reManifest = /"(https?:\/\/(?:manifest\.googlevideo\.com[^"\\\s]*|[^"\\\s]*hls_playlist[^"\\\s]*|[^"\\\s]*\/manifest\/[^"\\\s]*))"/gi;
+      // Page-issued rendition URLs (signed videoplayback + itag pairs).
+      const reRendition = /"(https?:\/\/[^"\\\s]*googlevideo\.com\/videoplayback[^"\\\s]*?[?&]itag=\d+[^"\\\s]*)"/gi;
       document.querySelectorAll("script:not([src])").forEach(s => {
         const t = s.textContent || "";
-        if (!t || t.length > 500000) return;
+        if (!t || t.length > 5000000) return;
         let m;
         while ((m = re.exec(t)) !== null) push(m[1] || m[2], 5);
         let mm;
         while ((mm = reManifest.exec(t)) !== null) push(mm[1], 9);
+        let mr;
+        while ((mr = reRendition.exec(t)) !== null) push(mr[1], 8);
       });
     } catch (e) {}
 
@@ -739,8 +749,14 @@
           sub: `Direct stream • Res: (${w}x${h})`
         });
       });
-    const audioItag = validMedia.find(m =>
-      m.type === "audio" && /[?&]itag=\d+/i.test(m.url) && !/[?&]sabr=\d/i.test(m.url));
+    const audioItag = validMedia.find(m => {
+      if (!/[?&]itag=\d+/i.test(m.url) || /[?&]sabr=\d/i.test(m.url)) return false;
+      if (m.type === "audio") return true;
+      // Embedded player URLs carry no audio markers in the URL itself;
+      // the rendition id is the signal (e.g. itag 140 = m4a audio).
+      const num = parseInt((m.url.match(/[?&]itag=(\d+)/i) || [])[1] || "0", 10);
+      return ITAG_AUDIO.has(num);
+    });
 
     // 1. Check for HLS (.m3u8) or DASH (.mpd) stream.
     // Filter out audio-only tracks so video downloads NEVER receive audio-only URLs!

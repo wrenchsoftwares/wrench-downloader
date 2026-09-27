@@ -8,6 +8,27 @@ const requestHeadersMap = new Map(); // url -> { referer, userAgent }
 const contentDispositionMap = new Map(); // url -> server filename
 const APP_SERVER_URL = "http://127.0.0.1:45732/api/download";
 
+// Debug tracking: last sends to the desktop app (what site, what quality,
+// how many session cookies, when). Pulled via GET_RECENT_SENDS when the user
+// reports a broken download; matched against the app's startup.log by time.
+const recentSends = [];
+function trackSend(payload) {
+  try {
+    const page = payload.pageUrl || payload.referrer || "";
+    let host = "";
+    try { host = new URL(page || payload.url || "").hostname; } catch (e) {}
+    recentSends.unshift({
+      time: new Date().toISOString(),
+      site: host,
+      quality: payload.quality || "",
+      format: payload.format || "",
+      cookies: (payload.cookies || []).length,
+      urlHost: (() => { try { return new URL(payload.url || "").hostname; } catch (e) { return ""; } })()
+    });
+    if (recentSends.length > 20) recentSends.pop();
+  } catch (e) {}
+}
+
 function parseContentDispositionFilename(headerVal) {
   if (!headerVal) return "";
   try {
@@ -63,9 +84,12 @@ chrome.webRequest.onHeadersReceived.addListener(
 
     // Ignore chunked video fragments / ping requests to avoid cluttering dropdown.
     // Generic URL patterns only - no per-site rules.
+    // NOTE: /videoplayback is deliberately NOT ignored: range-less requests
+    // are the exact bytes the browser is already playing (authorized session
+    // included), which is precisely what the desktop app cannot re-resolve on
+    // gated pages. Chunk continuations (range/bytestart) are still skipped.
     // (.ts = HLS fragments: a 10s chunk that plays only a fragment, never the video.)
     if (
-      url.includes("/videoplayback") ||
       url.includes("/segment") ||
       url.includes("/frag") ||
       url.includes("range=") ||
@@ -107,12 +131,16 @@ chrome.webRequest.onHeadersReceived.addListener(
       }
     }
 
-    const isAudioTrack = contentType.startsWith("audio/") ||
+    const itag = itagOf(url);
+    const itagHeight = ITAG_HEIGHTS[itag] || 0;
+    const itagAudio = ITAG_AUDIO.has(itag);
+    const isAudioTrack = itagAudio || contentType.startsWith("audio/") ||
       url.includes("/mp4a/") || url.includes("/audio/") || url.includes("/aac/") ||
       url.match(/\.(mp3|aac|m4a|ogg|opus)($|\?)/i) || url.match(/[-_]audio(\.|\/|$)/i);
     const isHls = url.includes(".m3u8") || contentType.includes("mpegurl") || contentType.includes("application/x-mpegurl");
     const isDash = url.includes(".mpd") || contentType.includes("dash+xml");
-    const isVideo = contentType.startsWith("video/") || url.match(/\.(mp4|webm|mkv|m4v|mov|avi)($|\?)/i);
+    const isVideo = contentType.startsWith("video/") || url.match(/\.(mp4|webm|mkv|m4v|mov|avi)($|\?)/i) ||
+      (itagHeight > 0 && !itagAudio);
 
     if (isHls || isDash || isVideo || isAudioTrack) {
       const headers = requestHeadersMap.get(url) || {};
@@ -122,6 +150,7 @@ chrome.webRequest.onHeadersReceived.addListener(
         url: url,
         title: guessTitle(url),
         type: type,
+        quality: itagHeight > 0 ? `${itagHeight}p` : "",
         size: formatBytes(contentLength),
         contentLengthBytes: contentLength,
         contentType: contentType,
@@ -166,6 +195,9 @@ chrome.webRequest.onBeforeRequest.addListener(
 function guessTitle(url) {
   try {
     const urlObj = new URL(url);
+    // Rendition-id stream URLs carry no filename; the content script replaces
+    // this with the real video title once it associates the stream.
+    if (/videoplayback/i.test(urlObj.pathname)) return "Video";
     // 1. Check common query parameter names used by file download mirrors (e.g. slug=win64.exe.zip, file=..., filename=...)
     for (const param of ["slug", "file", "filename", "name", "title"]) {
       const val = urlObj.searchParams.get(param);
@@ -190,8 +222,27 @@ function guessTitle(url) {
   return "Download";
 }
 
-function formatBytes(bytes) {
-  if (!bytes || bytes <= 0) return "";
+// Rendition-id table: stream URLs carrying ?itag=N& identify the exact bytes
+// the browser is playing (progressive or DASH renditions). Height 0 =
+// unknown id; audio ids double as the audio-only download.
+const ITAG_HEIGHTS = {
+  17: 144, 36: 240, 18: 360, 43: 360, 22: 720,
+  160: 144, 133: 240, 242: 240, 394: 144, 395: 240,
+  134: 360, 243: 360, 396: 360, 234: 480, 235: 480,
+  135: 480, 244: 480, 397: 480, 136: 720, 247: 720,
+  298: 720, 302: 720, 398: 720, 137: 1080, 248: 1080,
+  299: 1080, 303: 1080, 399: 1080, 264: 1440, 271: 1440,
+  400: 1440, 266: 2160, 313: 2160, 401: 2160
+};
+const ITAG_AUDIO = new Set([139, 140, 141, 256, 258, 249, 250, 251]);
+const ITAG_WEBM = new Set([43, 242, 243, 244, 247, 248, 249, 250, 251, 271, 272, 302, 303, 313, 394, 395, 396, 397, 398, 399, 400, 401]);
+
+function itagOf(url) {
+  const m = String(url || "").match(/[?&]itag=(\d+)\b/i);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
+function formatBytes(bytes) {  if (!bytes || bytes <= 0) return "";
   const units = ["B", "KB", "MB", "GB"];
   let i = 0;
   let val = bytes;
@@ -328,6 +379,11 @@ if (chrome.downloads && chrome.downloads.onCreated) {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const tabId = sender.tab ? sender.tab.id : message.tabId;
 
+  if (message.action === "GET_RECENT_SENDS") {
+    sendResponse({ sends: recentSends });
+    return true;
+  }
+
   if (message.action === "GET_MEDIA") {
     // Only this tab's streams: leaking another tab's media here produced
     // dropdown rows whose URLs don't match the current video (rows that fail).
@@ -346,6 +402,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === "SEND_TO_APP") {
+    trackSend(message.payload);
     sendToDesktopApp(message.payload)
       .then((res) => sendResponse({ success: true, result: res }))
       .catch((err) => sendResponse({ success: false, error: err.message }));

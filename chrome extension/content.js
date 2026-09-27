@@ -369,10 +369,26 @@
     } catch (e) { return []; }
   }
 
+  // Rendition-id (itag) helpers: mirror of the background table. Height 0 =
+  // unknown id (not listed); audio ids are offered as the audio download.
+  const ITAG_HEIGHTS = { 17: 144, 36: 240, 18: 360, 43: 360, 22: 720, 160: 144, 133: 240, 242: 240, 394: 144, 395: 240, 134: 360, 243: 360, 396: 360, 234: 480, 235: 480, 135: 480, 244: 480, 397: 480, 136: 720, 247: 720, 298: 720, 302: 720, 398: 720, 137: 1080, 248: 1080, 299: 1080, 303: 1080, 399: 1080, 264: 1440, 271: 1440, 400: 1440, 266: 2160, 313: 2160, 401: 2160 };
+  const ITAG_AUDIO = new Set([139, 140, 141, 256, 258, 249, 250, 251]);
+  const ITAG_WEBM = new Set([43, 242, 243, 244, 247, 248, 249, 250, 251, 271, 272, 302, 303, 313, 394, 395, 396, 397, 398, 399, 400, 401]);
+  function getItagHeight(u) {
+    const m = String(u || "").match(/[?&]itag=(\d+)\b/i);
+    return m ? (ITAG_HEIGHTS[parseInt(m[1], 10)] || 0) : 0;
+  }
+  function getItagContainer(u) {
+    const m = String(u || "").match(/[?&]itag=(\d+)\b/i);
+    if (m && ITAG_WEBM.has(parseInt(m[1], 10))) return "webm";
+    if (m && ITAG_AUDIO.has(parseInt(m[1], 10))) return "m4a";
+    return "mp4";
+  }
+
   function isPlayableStreamUrl(u) {
     if (!u || typeof u !== "string") return false;
     if (!/^https?:\/\//i.test(u)) return false;
-    if (/videoplayback|bytestart|byteend|range=|\.m4s($|\?)|\.ts($|\?)|init\.mp4|init\.m4s|\/segment|\/frag|beacon|analytics|preview|thumb|poster|sprite|storyboard/i.test(u)) return false;
+    if (/bytestart|byteend|range=|\.m4s($|\?)|\.ts($|\?)|init\.mp4|init\.m4s|\/segment|\/frag|beacon|analytics|preview|thumb|poster|sprite|storyboard/i.test(u)) return false;
     return true;
   }
 
@@ -649,7 +665,6 @@
       m.url &&
       !m.url.startsWith("blob:") &&
       !m.url.startsWith("data:") &&
-      !m.url.includes("/videoplayback") &&
       !m.url.includes("bytestart=") &&
       !m.url.includes("byteend=") &&
       !m.url.includes(".m4s") &&
@@ -658,6 +673,8 @@
       !m.url.includes("range=") &&
       !m.url.includes("/segment") &&
       !m.url.includes("/frag") &&
+      // SABR/challenge URLs only play inside the page's own session handshake.
+      !/[?&]sabr=\d/i.test(m.url) &&
       // HLS fragments are never standalone videos (a 10s .ts chunk looks
       // like a "download" but plays only a fragment - the #1 junk entry).
       !/\.(m4s|ts)(\?|#|$)/i.test(m.url.split("?")[0]) &&
@@ -667,6 +684,42 @@
         Number(m.contentLengthBytes) > 0 &&
         Number(m.contentLengthBytes) < 256 * 1024)
     );
+
+    // Rendition-id streams (e.g. ?itag=22&): the exact bytes the browser is
+    // already playing, authorized session included. They download directly
+    // with no page re-resolve, so they outrank everything else - this is what
+    // makes gated videos downloadable while merely watched in the tab.
+    const streamHeights = new Set();
+    const itagVideo = new Map();
+    validMedia.forEach(m => {
+      if (m.type === "audio" || /[?&]sabr=\d/i.test(m.url)) return;
+      const h = getItagHeight(m.url);
+      if (h <= 0 || itagVideo.has(h)) return;
+      itagVideo.set(h, m);
+    });
+    Array.from(itagVideo.entries())
+      .sort((a, b) => b[0] - a[0])
+      .slice(0, 6)
+      .forEach(([h, m]) => {
+        const label = `${h}p`;
+        const ext = getItagContainer(m.url);
+        const w = Math.round(h * 16 / 9);
+        streamHeights.add(label.toLowerCase());
+        items.push({
+          displayName: `${title} - ${label}.${ext}`,
+          title: `${title} - ${label}`,
+          quality: label,
+          format: ext,
+          url: m.url,
+          pageUrl: postPageUrl,
+          referrer: m.referer || postPageUrl,
+          userAgent: m.userAgent || navigator.userAgent,
+          badge: label.toUpperCase(),
+          sub: `Direct stream • Res: (${w}x${h})`
+        });
+      });
+    const audioItag = validMedia.find(m =>
+      m.type === "audio" && /[?&]itag=\d+/i.test(m.url) && !/[?&]sabr=\d/i.test(m.url));
 
     // 1. Check for HLS (.m3u8) or DASH (.mpd) stream.
     // Filter out audio-only tracks so video downloads NEVER receive audio-only URLs!
@@ -777,15 +830,16 @@
         }
       }
 
+      const audioUrl = (audioItag && audioItag.url) || streamItem.url;
       items.push({
         displayName: `${title} - Audio.mp3`,
         title: `${title} - Audio`,
         quality: "audio",
         format: "mp3",
-        url: streamItem.url,
+        url: audioUrl,
         pageUrl: postPageUrl,
-        referrer: streamItem.referer || postPageUrl,
-        userAgent: streamItem.userAgent || navigator.userAgent,
+        referrer: (audioItag && audioItag.referer) || streamItem.referer || postPageUrl,
+        userAgent: (audioItag && audioItag.userAgent) || streamItem.userAgent || navigator.userAgent,
         badge: "MP3",
         sub: `Format: MP3 | Res: (Audio Only)`
       });
@@ -797,7 +851,9 @@
       if (variants.length > 0 || coveredByStream) return items;
     }
 
-    const streamHeights = new Set(items.map(i => (i.quality || "").toLowerCase()));
+    // (streamHeights seeded above with exact-stream heights, so page-resolve
+    // and direct rows never duplicate them.)
+    items.forEach(i => { const q = (i.quality || "").toLowerCase(); if (q) streamHeights.add(q); });
 
     // 2. Page-embedded direct files (freshest page-issued URLs first).
     // Group by detected quality so each entry is a distinct real stream.
@@ -1099,6 +1155,12 @@
       // Diff-render: identical list => don't touch the DOM at all (no flash).
       const sig = dropdownItemsSignature(items);
       if (menu._itemsSignature === sig) return;
+      // Debug tracking: what the browser offered for this video (labels only,
+      // no URLs). Reported via console; matched with app logs by page + time.
+      try {
+        console.debug("[wrench-track] dropdown for " + window.location.hostname + ": " +
+          items.map(i => `${i.badge || "?"}|${(i.displayName || i.title || "").slice(0, 60)}`).join(" ;; ").slice(0, 600));
+      } catch (e) {}
       menu.querySelectorAll(".wrench-dropdown-item, .wrench-dropdown-empty").forEach((e) => e.remove());
 
       if (items.length === 0) {

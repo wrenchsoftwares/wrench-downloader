@@ -40,6 +40,13 @@ public class ExtensionBridgeServer
         try { _listener?.Stop(); } catch { }
     }
 
+#if DEBUG
+    private static string SafeHost(string? url)
+    {
+        try { return new Uri(url ?? "").Host; } catch { return "?"; }
+    }
+#endif
+
     private async Task ListenLoop()
     {
         while (_isRunning && _listener != null && _listener.IsListening)
@@ -144,6 +151,11 @@ public class ExtensionBridgeServer
                     };
 
                     _onDownloadRequested?.Invoke((item, showPrompt));
+#if DEBUG
+                    DownloadEngine.Track(item,
+                        $"BRIDGE-RECV site={SafeHost(pageUrl)} quality={quality} " +
+                        $"cookies={(cookies?.Count ?? 0)} prompt={showPrompt} url={url}");
+#endif
 
                     byte[] respBytes = Encoding.UTF8.GetBytes("{\"success\":true,\"id\":\"" + item.Id + "\"}");
                     res.ContentType = "application/json";

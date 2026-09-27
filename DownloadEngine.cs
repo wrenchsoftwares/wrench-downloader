@@ -28,6 +28,10 @@ public class DownloadEngine
         // Immediately yield so the caller (especially UI thread) returns instantly without blocking
         await Task.Yield();
 
+#if DEBUG
+        TrackStart(item);
+#endif
+
         string configuredDownloadFolder = SettingsHelper.DownloadFolder;
         string downloadsFolder = item.TargetFolder;
         if (string.IsNullOrWhiteSpace(downloadsFolder) || !Directory.Exists(downloadsFolder))
@@ -416,11 +420,17 @@ public class DownloadEngine
         var authBrowsersTried = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         int stuckFailures = 0;
         string? lastHead = null;
+#if DEBUG
+        int attemptCount = 0;
+#endif
         bool firstTry = true;
 
         while (pendingUrls.Count > 0 && !succeeded)
         {
             var attempt = pendingUrls.Peek();
+#if DEBUG
+            attemptCount++;
+#endif
             string attemptUrl = attempt.Url;
             string attemptArgs = commonArgs + (attempt.CookieArgs ?? "") + (ariaActive ? ariaSuffix : "");
             if (!firstTry)
@@ -636,6 +646,9 @@ public class DownloadEngine
                 }
                 item.StatusText = AppLocalization.Format("download.completedSaved", Path.GetFileName(item.SavePath));
                 succeeded = true;
+#if DEBUG
+                TrackEnd(item, $"OK file={item.SavePath} attempts={attemptCount}");
+#endif
             }
             else
             {
@@ -645,6 +658,9 @@ public class DownloadEngine
                     item.SpeedText = AppLocalization.Get("download.pausedSpeed");
                     item.StatusText = AppLocalization.Get("download.paused");
                     item.EtaText = "--";
+#if DEBUG
+                    TrackEnd(item, $"PAUSED attempts={attemptCount}");
+#endif
                     break;
                 }
 
@@ -707,6 +723,11 @@ public class DownloadEngine
                     item.StatusText = !string.IsNullOrWhiteSpace(lastError) && lastError.Length > 90
                         ? lastError[..90] + "..."
                         : lastError;
+#if DEBUG
+                    string stuckShort = lastError ?? "";
+                    if (stuckShort.Length > 200) stuckShort = stuckShort[..200];
+                    TrackEnd(item, $"FAILED stuck attempts={attemptCount} error={stuckShort}");
+#endif
                     break;
                 }
                 // Auth-walled content (age checks, login walls, private videos
@@ -768,6 +789,11 @@ public class DownloadEngine
                 item.Status = DownloadStatus.Failed;
                 item.EtaText = "--";
                 LogDiag(item, $"terminal failure: {lastError}");
+#if DEBUG
+                string failShort = lastError ?? "";
+                if (failShort.Length > 200) failShort = failShort[..200];
+                TrackEnd(item, $"FAILED attempts={attemptCount} error={failShort}");
+#endif
                 if (!string.IsNullOrWhiteSpace(lastError))
                 {
                     bool expired = lastError.Contains("410", StringComparison.OrdinalIgnoreCase) &&
@@ -789,6 +815,9 @@ public class DownloadEngine
             item.Status = DownloadStatus.Paused;
             item.SpeedText = AppLocalization.Get("download.pausedSpeed");
             item.StatusText = AppLocalization.Get("download.paused");
+#if DEBUG
+            TrackEnd(item, "PAUSED (cancelled)");
+#endif
             break;
         }
         catch (Exception ex)
@@ -798,10 +827,16 @@ public class DownloadEngine
                 item.Status = DownloadStatus.Paused;
                 item.SpeedText = AppLocalization.Get("download.pausedSpeed");
                 item.StatusText = AppLocalization.Get("download.paused");
+#if DEBUG
+                TrackEnd(item, "PAUSED (cancelled)");
+#endif
                 break;
             }
             item.Status = DownloadStatus.Failed;
             item.StatusText = AppLocalization.Format("download.error", ex.Message);
+#if DEBUG
+            TrackEnd(item, $"FAILED exception={ex.Message}");
+#endif
             break;
         }
         }
@@ -957,6 +992,9 @@ public class DownloadEngine
             item.SavePath = dest;
             item.Title = Path.GetFileName(dest);
             item.StatusText = AppLocalization.Format("download.saved", Path.GetFileName(item.SavePath));
+#if DEBUG
+            TrackEnd(item, $"OK file={dest}");
+#endif
         }
         catch (OperationCanceledException)
         {
@@ -964,6 +1002,9 @@ public class DownloadEngine
             item.SpeedText = AppLocalization.Get("download.pausedSpeed");
             item.StatusText = AppLocalization.Get("download.paused");
             item.EtaText = "--";
+#if DEBUG
+            TrackEnd(item, "PAUSED (cancelled)");
+#endif
             try { if (Directory.Exists(partsSubdir)) Directory.Delete(partsSubdir, recursive: true); } catch { }
         }
         catch (Exception ex)
@@ -972,6 +1013,9 @@ public class DownloadEngine
             item.StatusText = AppLocalization.Format("download.error", ex.Message);
             item.EtaText = "--";
             LogDiag(item, $"direct failed: {ex}");
+#if DEBUG
+            TrackEnd(item, $"FAILED exception={ex.Message}");
+#endif
         }
     }
 
@@ -1271,6 +1315,43 @@ public class DownloadEngine
         }
         catch { }
     }
+
+    /// <summary>
+    /// Debug-build tracking: who (site/page), what (url/quality/session) and
+    /// how it ended. The user reports a broken download, we grep this id in
+    /// startup.log. Calls are wrapped in #if DEBUG by callers; this method
+    /// itself is always compiled so both engine and bridge can use it.
+    /// </summary>
+    public static void Track(DownloadItem item, string message)
+    {
+        try
+        {
+            File.AppendAllText(PortablePaths.StartupLogPath,
+                $"[{DateTime.Now}] [track:{item.Id[..8]}:{item.Title}] {message}\n");
+        }
+        catch { }
+    }
+
+#if DEBUG
+    private static string HostOf(string? url)
+    {
+        try { return new Uri(url ?? "").Host; } catch { return "?"; }
+    }
+
+    private static void TrackStart(DownloadItem item)
+    {
+        Track(item, $"START site={HostOf(item.PageUrl)} " +
+            $"page={item.PageUrl} url={item.Url} quality={item.Quality} " +
+            $"cookies={(item.Cookies?.Count ?? 0)} ref={HostOf(item.Referrer)} " +
+            $"ua={(string.IsNullOrEmpty(item.UserAgent) ? "no" : "yes")} " +
+            $"playlist={item.DownloadPlaylist}");
+    }
+
+    private static void TrackEnd(DownloadItem item, string outcome)
+    {
+        Track(item, $"END {outcome}");
+    }
+#endif
 
     private static async Task<string> EnsurePlayableMediaFileAsync(string searchDir, string safeTitle, string expectedExt, string knownPath, CancellationToken cancellationToken = default)
     {

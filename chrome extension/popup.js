@@ -36,13 +36,22 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Same generic flow on every page: ask the tab for its real items first,
   // fall back to background-captured streams, then to a plain page entry.
-  chrome.tabs.sendMessage(activeTab.id, { action: "GET_FORMATS" }, (response) => {
-    if (!chrome.runtime.lastError && response && response.items && response.items.length > 0) {
-      renderItems(response.items.filter((item) => item.url && !item.isPromptToPlay));
-      if (listEl.children.length > 0) return;
-    }
-    renderCapturedFallback();
-  });
+  // Empty answers are retried: ad iframes (no video) answer [] while the
+  // real video frame may still be resolving its streams.
+  function askFormats(triesLeft, done) {
+    chrome.tabs.sendMessage(activeTab.id, { action: "GET_FORMATS" }, (response) => {
+      if (!chrome.runtime.lastError && response && response.items && response.items.length > 0) {
+        renderItems(response.items.filter((item) => item.url && !item.isPromptToPlay));
+        if (listEl.children.length > 0) return;
+      }
+      if (triesLeft > 0) {
+        setTimeout(() => askFormats(triesLeft - 1, done), 1500);
+      } else {
+        done();
+      }
+    });
+  }
+  askFormats(2, renderCapturedFallback);
   return;
 
   function renderItems(items) {

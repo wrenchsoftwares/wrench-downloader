@@ -107,7 +107,20 @@
       }
       if (msg.action === "GET_FORMATS") {
         collectItemsForPopup()
-          .then(items => sendResponse({ items: items || [] }))
+          .then(items => {
+            // Multi-frame race: tabs.sendMessage is answered by EVERY frame
+            // running this script, first response wins. Ad/tracking iframes
+            // (no video) answer [] instantly and would shadow the real video.
+            // Frames WITH items answer immediately; empty frames hold back so
+            // the video's answer wins. Top frame waits less (embeds live in
+            // subframes and need a head start the other way).
+            if (items && items.length > 0) {
+              sendResponse({ items });
+            } else {
+              const isTop = (() => { try { return window === window.top; } catch (e) { return false; } })();
+              setTimeout(() => sendResponse({ items: [] }), isTop ? 1500 : 4000);
+            }
+          })
           .catch(e => sendResponse({ items: [], error: String(e).slice(0, 200) }));
         return true;
       }

@@ -99,6 +99,28 @@ public class ExtensionBridgeServer
                 string pageUrl = root.TryGetProperty("pageUrl", out var pEl) ? pEl.GetString() ?? "" : "";
                 string referrer = root.TryGetProperty("referrer", out var rEl) ? rEl.GetString() ?? "" : "";
                 string userAgent = root.TryGetProperty("userAgent", out var uEl) ? uEl.GetString() ?? "" : "";
+                List<BrowserCookie>? cookies = null;
+                if (root.TryGetProperty("cookies", out var cookiesEl) && cookiesEl.ValueKind == JsonValueKind.Array)
+                {
+                    cookies = new List<BrowserCookie>();
+                    foreach (var c in cookiesEl.EnumerateArray())
+                    {
+                        if (c.ValueKind != JsonValueKind.Object) continue;
+                        string name = c.TryGetProperty("name", out var nEl) ? nEl.GetString() ?? "" : "";
+                        if (string.IsNullOrEmpty(name)) continue;
+                        cookies.Add(new BrowserCookie
+                        {
+                            Name = name,
+                            Value = c.TryGetProperty("value", out var vEl) ? vEl.GetString() ?? "" : "",
+                            Domain = c.TryGetProperty("domain", out var dEl) ? dEl.GetString() ?? "" : "",
+                            Path = c.TryGetProperty("path", out var pEl2) ? pEl2.GetString() ?? "/" : "/",
+                            Secure = c.TryGetProperty("secure", out var sEl) && sEl.ValueKind == JsonValueKind.True,
+                            Expiry = c.TryGetProperty("expiry", out var eEl) && eEl.ValueKind == JsonValueKind.Number ? eEl.GetInt64() : 0
+                        });
+                        if (cookies.Count >= 100) break;
+                    }
+                    if (cookies.Count == 0) cookies = null;
+                }
 
                 if (!string.IsNullOrWhiteSpace(url))
                 {
@@ -116,6 +138,7 @@ public class ExtensionBridgeServer
                         PageUrl = pageUrl,
                         Referrer = referrer,
                         UserAgent = userAgent,
+                        Cookies = cookies,
                         Status = DownloadStatus.Queued,
                         StatusText = "Added from browser extension"
                     };

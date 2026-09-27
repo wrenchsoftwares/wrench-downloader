@@ -14,6 +14,17 @@ public enum DownloadStatus
     Failed
 }
 
+/// <summary>One browser cookie as handed over by the companion extension.</summary>
+public sealed class BrowserCookie
+{
+    public string Name { get; set; } = "";
+    public string Value { get; set; } = "";
+    public string Domain { get; set; } = "";
+    public string Path { get; set; } = "/";
+    public bool Secure { get; set; }
+    public long Expiry { get; set; }
+}
+
 public class DownloadItem : INotifyPropertyChanged
 {
     private string _title = AppLocalization.Get("common.download");
@@ -57,6 +68,9 @@ public class DownloadItem : INotifyPropertyChanged
     public string PageUrl { get; set; } = "";
     public string Referrer { get; set; } = "";
     public string UserAgent { get; set; } = "";
+    /// <summary>Live browser-session cookies handed over by the extension
+    /// (works while the browser runs, unlike cookie-DB export).</summary>
+    public List<BrowserCookie>? Cookies { get; set; }
     public string TargetFolder { get; set; } = "";
     public string QueueName { get; set; } = "Main queue";
     public bool DownloadPlaylist { get; set; }

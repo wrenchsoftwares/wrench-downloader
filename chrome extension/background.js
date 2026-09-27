@@ -354,6 +354,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 async function sendToDesktopApp(payload) {
+  // Hand the app the live browser session: cookie-DB export (yt-dlp
+  // --cookies-from-browser) fails while Chrome runs with a locked profile,
+  // but the extension can read its own tabs' cookies directly - including
+  // HttpOnly ones - so age/logged-in gates open exactly like they do for
+  // browser-attached downloaders. Best-effort: older installs without the
+  // "cookies" permission simply send none.
+  try {
+    const cookieUrl = payload.pageUrl || payload.referrer || payload.url || "";
+    if (cookieUrl && /^https?:\/\//i.test(cookieUrl) &&
+        chrome.cookies && chrome.cookies.getAll) {
+      const raw = await chrome.cookies.getAll({ url: cookieUrl });
+      if (raw && raw.length > 0) {
+        payload.cookies = raw.slice(0, 100).map(c => ({
+          name: c.name || "",
+          value: c.value || "",
+          domain: (c.domain || "").replace(/^\./, ""),
+          path: c.path || "/",
+          secure: !!c.secure,
+          expiry: c.expirationDate ? Math.floor(c.expirationDate) : 0
+        }));
+      }
+    }
+  } catch (e) {}
+
   try {
     const response = await fetch(APP_SERVER_URL, {
       method: "POST",

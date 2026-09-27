@@ -72,6 +72,53 @@ public static class ChallengeSolver
         catch { }
     }
 
+    /// <summary>
+    /// Writes live browser-session cookies (handed over by the companion
+    /// extension, which can read them while the browser runs) to a Netscape
+    /// jar for yt-dlp (--cookies). Returns the temp jar path, or null when
+    /// there is nothing usable to write.
+    /// </summary>
+    public static string? WriteCookieJar(string? pageUrl, List<BrowserCookie>? cookies)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(pageUrl) || cookies == null || cookies.Count == 0)
+                return null;
+            var uri = new Uri(pageUrl);
+            string host = uri.Host.TrimStart('.');
+            if (string.IsNullOrEmpty(host))
+                return null;
+            long fallbackExpiry = DateTimeOffset.UtcNow.AddDays(1).ToUnixTimeSeconds();
+            var sb = new System.Text.StringBuilder("# Netscape HTTP Cookie File\n");
+            int written = 0;
+            foreach (var c in cookies)
+            {
+                if (string.IsNullOrEmpty(c.Name))
+                    continue;
+                string domain = (c.Domain ?? "").Trim().TrimStart('.');
+                if (string.IsNullOrEmpty(domain))
+                    domain = host;
+                string path = string.IsNullOrEmpty(c.Path) ? "/" : c.Path;
+                long expiry = c.Expiry > 0 ? c.Expiry : fallbackExpiry;
+                sb.Append('.').Append(domain).Append('\t')
+                  .Append("TRUE\t").Append(path).Append('\t')
+                  .Append(c.Secure ? "TRUE\t" : "FALSE\t")
+                  .Append(expiry).Append('\t')
+                  .Append(c.Name).Append('\t').Append(c.Value ?? "").Append('\n');
+                if (++written >= 100) break;
+            }
+            if (written == 0)
+                return null;
+            string jarPath = Path.Combine(Path.GetTempPath(), $"wd_session_{Guid.NewGuid():N}.txt");
+            File.WriteAllText(jarPath, sb.ToString());
+            return jarPath;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private static bool HasChallenge(string html) =>
         html.Contains("onload=\"go()\"", StringComparison.OrdinalIgnoreCase) ||
         html.Contains("onload='go()'", StringComparison.OrdinalIgnoreCase) ||

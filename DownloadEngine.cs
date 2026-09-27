@@ -311,6 +311,23 @@ public class DownloadEngine
 
         string commonArgs = argsBuilder.ToString();
 
+        // Live browser session from the extension: cookie-DB export fails
+        // while the browser runs (locked profile), but the extension reads
+        // its own tabs' cookies directly. Attaching them to every attempt
+        // opens age/logged-in gates exactly like browser-attached downloaders.
+        string? extensionCookieFile = null;
+        if (item.Cookies != null && item.Cookies.Count > 0)
+        {
+            string jarHostUrl = !string.IsNullOrWhiteSpace(item.PageUrl) ? item.PageUrl : item.Url;
+            try { extensionCookieFile = ChallengeSolver.WriteCookieJar(jarHostUrl, item.Cookies); }
+            catch { extensionCookieFile = null; }
+            if (extensionCookieFile != null)
+            {
+                commonArgs += $"--cookies \"{extensionCookieFile}\" ";
+                LogDiag(item, $"browser session attached ({item.Cookies.Count} cookies)");
+            }
+        }
+
         // Some video pages gate playback behind an inline JS cookie-challenge
         // in their HTML (a script sets a session cookie, then reloads) while
         // captured CDN links are short-lived signed URLs that die with
@@ -319,9 +336,11 @@ public class DownloadEngine
         // the source page combined with a solved or browser session.
         // Detection is structural: the page HTML is probed for challenge
         // markers (never matched by site name). Probing is skipped when there
-        // is no page URL, since the challenge can only live in page HTML.
+        // is no page URL, since the challenge can only live in page HTML, and
+        // when the extension already attached a live session (the solved jar
+        // would add nothing on top of it).
         string? challengeCookieFile = null;
-        if (!string.IsNullOrWhiteSpace(item.PageUrl))
+        if (extensionCookieFile == null && !string.IsNullOrWhiteSpace(item.PageUrl))
         {
             try { challengeCookieFile = await ChallengeSolver.CreateCookieFileAsync(item.PageUrl, cancellationToken); }
             catch { challengeCookieFile = null; }
@@ -394,6 +413,9 @@ public class DownloadEngine
         }
         var pendingUrls = new Queue<(string Url, string? CookieArgs)>(plan);
         int sameUrlRetries = 0;
+        var authBrowsersTried = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        int stuckFailures = 0;
+        string? lastHead = null;
         bool firstTry = true;
 
         while (pendingUrls.Count > 0 && !succeeded)
@@ -547,13 +569,18 @@ public class DownloadEngine
                     }
                     // Browser-session unavailable (no Chrome, locked profile, ...):
                     // cookie attempts would all fail identically, skip them.
+                    // NB: only genuine export failures count. Extractor errors
+                    // that merely ADVISE "--cookies-from-browser" (e.g. age or
+                    // login walls) must NOT set this, or the queue head is
+                    // never dequeued and the download loops forever.
                     if (errLine.Contains("ould not copy", StringComparison.OrdinalIgnoreCase) &&
                         errLine.Contains("cookie", StringComparison.OrdinalIgnoreCase))
                     {
                         cookiesFailed = true;
                     }
-                    else if (errLine.Contains("cookies-from-browser", StringComparison.OrdinalIgnoreCase) &&
-                             errLine.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase))
+                    else if (errLine.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase) &&
+                             errLine.Contains("cookies-from-browser", StringComparison.OrdinalIgnoreCase) &&
+                             Regex.IsMatch(errLine, @"could not|failed|not found|unable to|error (getting|extracting|copying|reading)|no .*cookies?", RegexOptions.IgnoreCase))
                     {
                         cookiesFailed = true;
                     }
@@ -650,6 +677,65 @@ public class DownloadEngine
                 bool linkExpired = lastError.Contains("410", StringComparison.OrdinalIgnoreCase) &&
                                    (lastError.Contains("gone", StringComparison.OrdinalIgnoreCase) ||
                                     lastError.Contains("unable to download", StringComparison.OrdinalIgnoreCase));
+                // Circuit breaker: the same identical attempt (URL + args) must
+                // never fail forever. Legit same-attempt retries (rate-limit
+                // waits, aria2c fallback) resolve within 3 consecutive
+                // failures; anything beyond that is a stuck loop, so drop the
+                // head and move on instead of spinning until the user kills us.
+                string headKey = $"{attemptUrl}|{attempt.CookieArgs}";
+                if (headKey.Equals(lastHead, StringComparison.OrdinalIgnoreCase)) stuckFailures++;
+                else { stuckFailures = 1; lastHead = headKey; }
+                if (stuckFailures > 3)
+                {
+                    LogDiag(item, "attempt stuck without progress, dropping it");
+                    stuckFailures = 0;
+                    lastHead = null;
+                    sameUrlRetries = 0;
+                    if (pendingUrls.Count > 0) pendingUrls.Dequeue();
+                    if (pendingUrls.Count > 0)
+                    {
+                        item.Progress = 0;
+                        item.SavePath = "";
+                        item.EtaText = "--";
+                        item.StatusText = AppLocalization.Get("download.retryViaPage");
+                        item.SpeedText = AppLocalization.Get("download.resolving");
+                        continue;
+                    }
+                    item.Status = DownloadStatus.Failed;
+                    item.EtaText = "--";
+                    LogDiag(item, $"terminal failure: {lastError}");
+                    item.StatusText = !string.IsNullOrWhiteSpace(lastError) && lastError.Length > 90
+                        ? lastError[..90] + "..."
+                        : lastError;
+                    break;
+                }
+                // Auth-walled content (age checks, login walls, private videos
+                // the user can access): plain requests fail while the user's
+                // browser already holds a verified session - exactly how
+                // browser-attached downloaders get these files. Retry the same
+                // URL through the browser's cookies (chrome -> edge -> brave).
+                // Purely error-driven; no site lists. Skipped when cookie
+                // export itself is broken (same guaranteed failure).
+                if (!cookiesFailed && IsAuthError(lastError))
+                {
+                    string? nextBrowser = NextAuthBrowser(attempt.CookieArgs, attemptUrl, authBrowsersTried);
+                    if (nextBrowser != null)
+                    {
+                        authBrowsersTried.Add($"{attemptUrl}|{nextBrowser}");
+                        LogDiag(item, $"auth wall detected, retrying with {nextBrowser} session");
+                        pendingUrls.Dequeue();
+                        var rest = pendingUrls.ToList();
+                        pendingUrls.Clear();
+                        pendingUrls.Enqueue((attemptUrl, $"--cookies-from-browser {nextBrowser} "));
+                        foreach (var p in rest) pendingUrls.Enqueue(p);
+                        item.Progress = 0;
+                        item.SavePath = "";
+                        item.EtaText = "--";
+                        item.StatusText = AppLocalization.Get("download.resolving");
+                        item.SpeedText = AppLocalization.Get("download.resolving");
+                        continue;
+                    }
+                }
                 // Flaky endpoints (rate limits, Cloudflare walls, empty JSON):
                 // retry the same URL briefly before giving up on it.
                 // Skipped for expired signed links (410: retrying is pointless)
@@ -720,6 +806,7 @@ public class DownloadEngine
         }
         }
         ChallengeSolver.DeleteCookieFile(challengeCookieFile);
+        ChallengeSolver.DeleteCookieFile(extensionCookieFile);
     }
 
     private static async Task DownloadDirectHttpAsync(DownloadItem item, string downloadsFolder, CancellationToken cancellationToken)
@@ -1118,6 +1205,36 @@ public class DownloadEngine
     });
 
     private static string FindJsRuntimeArgs() => _cachedJsRuntimeArgs.Value;
+
+    /// <summary>
+    /// Auth-wall signals from yt-dlp output (age checks, login walls, private
+    /// content). Matched against error text only - never against site names.
+    /// </summary>
+    private static bool IsAuthError(string lastError) =>
+        !string.IsNullOrWhiteSpace(lastError) &&
+        Regex.IsMatch(lastError, @"sign in|log ?in|login|confirm your age|age.restrict|private video|pass cookies|cookies required|account.*required", RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// Next browser session to try for an auth-walled URL (chrome -&gt; edge
+    /// -&gt; brave), or null when the chain is exhausted. Each url+browser
+    /// pair is tried at most once.
+    /// </summary>
+    private static string? NextAuthBrowser(string? cookieArgs, string url, HashSet<string> tried)
+    {
+        string[] chain = ["chrome", "edge", "brave"];
+        string current = "";
+        if (!string.IsNullOrEmpty(cookieArgs))
+        {
+            var m = Regex.Match(cookieArgs, @"cookies-from-browser (\w+)");
+            if (m.Success) current = m.Groups[1].Value.ToLowerInvariant();
+        }
+        int nextIdx = string.IsNullOrEmpty(current) ? 0 : Array.IndexOf(chain, current) + 1;
+        for (int i = nextIdx; i < chain.Length; i++)
+        {
+            if (tried.Add($"{url}|{chain[i]}")) return chain[i];
+        }
+        return null;
+    }
 
     private static string? _cachedYtDlpVersion;
     private static string YtDlpVersion(string ytdlpPath)

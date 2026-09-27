@@ -701,21 +701,20 @@
       const userAgent = streamItem.userAgent || navigator.userAgent;
 
       // List REAL renditions from the master playlist when possible.
-      // Otherwise show ONE honest entry for the stream as captured.
+      // Otherwise list advertised qualities, else ONE honest entry.
       let variants = [];
+      let coveredByStream = false;
       if (!isRenditionLike(streamItem.url)) {
         if (isHls) variants = await getHlsVariants(streamItem.url);
         else if (isDash) variants = await getDashVariants(streamItem.url);
       }
 
       if (variants.length > 0) {
-        // Show real renditions, but send the MASTER url + quality label so
-        // yt-dlp resolves fresh with both audio and video tracks merged.
-        // Cap at the 3 best: every extra row shares the SAME master URL and
-        // low renditions (184p/288p/...) are never what the user wants.
+        // Show ALL real renditions, but send the MASTER url + quality label
+        // so yt-dlp resolves fresh with both audio and video tracks merged.
         // Direct-file sections below are skipped: they are duplicates of
         // these renditions or stray fragments, not additional videos.
-        variants.slice(0, 3).forEach(v => {
+        variants.forEach(v => {
           const label = `${v.height}p`;
           items.push({
             displayName: `${title} - ${label}.mp4`,
@@ -731,24 +730,50 @@
           });
         });
       } else {
-        // If the master cannot be inspected, offer only a rendition confirmed by playback metadata.
-        const res = getResolutionFromVideo(video);
-        if (res) {
-          const downloadUrl = (isRenditionLike(streamItem.url) && postPageUrl)
-            ? postPageUrl
-            : streamItem.url;
-          items.push({
-            displayName: `${title} - ${res.label}.mp4`,
-            title: `${title} - ${res.label}`,
-            quality: res.label,
-            format: "mp4",
-            url: downloadUrl,
-            pageUrl: postPageUrl,
-            referrer: referrer,
-            userAgent: userAgent,
-            badge: res.label.toUpperCase(),
-            sub: `Available quality • Res: ${res.res}`
+        // Opaque player (no inspectable master): list every quality the page
+        // itself advertises for this video, each resolved by the app from the
+        // page URL. Labels come from embedded player configs, never invented.
+        const ladder = collectEmbeddedQualityLabels().filter(h =>
+          !items.some(i => (i.quality || "").toLowerCase() === `${h}p`));
+        if (ladder.length > 0) {
+          ladder.forEach(h => {
+            const label = `${h}p`;
+            const w = Math.round(h * 16 / 9);
+            items.push({
+              displayName: `${title} - ${label}.mp4`,
+              title: `${title} - ${label}`,
+              quality: label,
+              format: "mp4",
+              url: postPageUrl,
+              pageUrl: postPageUrl,
+              referrer: referrer,
+              userAgent: userAgent,
+              badge: label.toUpperCase(),
+              sub: `Available quality • Res: (${w}x${h})`
+            });
           });
+          coveredByStream = true;
+        } else {
+          // No advertised qualities: offer only the rendition confirmed by
+          // playback metadata.
+          const res = getResolutionFromVideo(video);
+          if (res) {
+            const downloadUrl = (isRenditionLike(streamItem.url) && postPageUrl)
+              ? postPageUrl
+              : streamItem.url;
+            items.push({
+              displayName: `${title} - ${res.label}.mp4`,
+              title: `${title} - ${res.label}`,
+              quality: res.label,
+              format: "mp4",
+              url: downloadUrl,
+              pageUrl: postPageUrl,
+              referrer: referrer,
+              userAgent: userAgent,
+              badge: res.label.toUpperCase(),
+              sub: `Available quality • Res: ${res.res}`
+            });
+          }
         }
       }
 
@@ -765,10 +790,11 @@
         sub: `Format: MP3 | Res: (Audio Only)`
       });
 
-      // Master playlist fully describes the video: the rows above (up to 3
-      // real renditions + audio) are the complete working set. Anything else
-      // captured on the page is a duplicate or a fragment - don't list it.
-      if (variants.length > 0) return items;
+      // Stream fully describes the video: the rows above (real renditions or
+      // advertised qualities + audio) are the complete working set. Anything
+      // else captured on the page is a duplicate or a fragment - don't list it.
+      // (Single unconfirmed fallback rows don't cover: direct files still apply.)
+      if (variants.length > 0 || coveredByStream) return items;
     }
 
     const streamHeights = new Set(items.map(i => (i.quality || "").toLowerCase()));
@@ -924,9 +950,31 @@
       });
     }
 
-    // Hard cap: the menu must stay short. Every row above is a distinct,
-    // verified working entry (real rendition, direct file, or page fallback).
-    return items.slice(0, 5);
+    // Hard cap: the menu stays short. Every row above is a distinct,
+    // working entry (real rendition, advertised quality, direct file,
+    // or page fallback).
+    return items.slice(0, 10);
+  }
+
+  // Every quality the page advertises for its video, best first. Harvested
+  // generically from embedded player configs (per-rendition labels such as
+  // "qualityLabel":"720p"), never invented - the app resolves each label to
+  // the real stream from the page URL.
+  function collectEmbeddedQualityLabels() {
+    const heights = new Set();
+    try {
+      document.querySelectorAll("script:not([src])").forEach(s => {
+        const t = s.textContent || "";
+        if (!t || t.length > 2000000) return;
+        const re = /"(?:qualityLabel|quality_label|label)"\s*:\s*"(\d{3,4})p"/gi;
+        let m;
+        while ((m = re.exec(t)) !== null) {
+          const h = parseInt(m[1], 10);
+          if (h >= 144 && h <= 4320) heights.add(h);
+        }
+      });
+    } catch (e) {}
+    return [...heights].sort((a, b) => b - a);
   }
 
   function sniffVideoSources(video) {

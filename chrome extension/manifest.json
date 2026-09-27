@@ -4,6 +4,7 @@
   "version": "26.2.3",
   "description": "Intercepts file downloads and sniffs video/audio streams, sending them to Wrench Downloader like IDM.",
   "permissions": [
+    "cookies",
     "downloads",
     "webRequest",
     "storage",

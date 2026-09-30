@@ -103,9 +103,6 @@ public class DownloadItem : INotifyPropertyChanged
     public string AudioInitRange { get; set; } = "";
     public List<StreamSegment>? Segments { get; set; }
     public List<StreamSegment>? AudioSegments { get; set; }
-    /// <summary>MSE recording session id. While set, the engine stays out:
-    /// bytes arrive via /api/segment and /api/finish assembles the file.</summary>
-    public string MseUploadId { get; set; } = "";
     /// <summary>Safe browser request headers captured for this exact media
     /// rendition. Used to reproduce the request Chrome already proved works.</summary>
     public Dictionary<string, string> StreamHeaders { get; set; } = new(StringComparer.OrdinalIgnoreCase);

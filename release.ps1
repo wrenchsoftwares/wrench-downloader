@@ -51,6 +51,10 @@ Copy-Item -LiteralPath $appPriPath -Destination (Join-Path $appDirectory "Wrench
 
 New-Item -ItemType Directory -Path $extensionDirectory -Force | Out-Null
 Copy-Item -Path (Join-Path $extensionSource "*") -Destination $extensionDirectory -Recurse -Force
+# Source manifest carries a "debug" suffix for local dev; releases must ship the clean store name.
+$packagedManifest = Join-Path $extensionDirectory "manifest.json"
+(Get-Content -LiteralPath $packagedManifest -Raw) -replace '"name":\s*"Wrench Downloader Companion debug"', '"name": "Wrench Downloader Companion"' |
+    Set-Content -LiteralPath $packagedManifest -NoNewline
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot "portable.mode") -Destination $portableMarker -Force
 
 $launcherSource = @'

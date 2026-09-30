@@ -428,7 +428,7 @@ function isExpiredUrl(u) {
     const s = String(u || "");
     let m = s.match(/[?&]expire=(\d+)/i);
     if (!m) {
-      // Some CDNs sign with e=<epoch> instead (e.g. phncdn masters).
+      // Some CDNs sign with e=<epoch> instead (e.g. epoch-signed masters).
       const e2 = s.match(/[?&]e=(\d{10})/);
       if (!e2) return false;
       const v = parseInt(e2[1], 10);
@@ -630,86 +630,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch((err) => sendResponse({ success: false, error: err.message }));
     return true;
   }
-
-  if (message.action === "MSE_BEGIN") {
-    const sendTabId = sender.tab ? sender.tab.id : message.tabId;
-    const payload = {
-      title: message.title || "Recording",
-      quality: "record",
-      format: "mp4",
-      pageUrl: message.pageUrl || "",
-      referrer: message.referrer || "",
-      userAgent: message.userAgent || navigator.userAgent,
-      mse: true,
-      uploadId: message.uploadId || "",
-      prompt: false
-    };
-    try {
-      if (sendTabId !== undefined && sendTabId !== null && sendTabId >= 0 && !payload.poToken) {
-        const pot = freshPot(sendTabId);
-        if (pot) payload.poToken = pot;
-      }
-    } catch (e) {}
-    sendToDesktopApp(payload, sendTabId)
-      .then((res) => sendResponse({ success: true, result: res }))
-      .catch((err) => sendResponse({ success: false, error: err.message }));
-    return true;
-  }
-
-  if (message.action === "MSE_CHUNK") {
-    // Ordered per track: localhost POSTs for one track chain sequentially so
-    // the app appends bytes in playback order even under concurrency.
-    const key = (message.uploadId || "") + "|" + (message.track || "video");
-    const prev = msePostChains.get(key) || Promise.resolve();
-    const next = prev.then(() => postMseChunk(message)).catch(() => {});
-    msePostChains.set(key, next);
-    if (msePostChains.size > 20) {
-      const firstKey = msePostChains.keys().next().value;
-      msePostChains.delete(firstKey);
-    }
-    sendResponse({ status: "queued" });
-    return true;
-  }
-
-  if (message.action === "MSE_END") {
-    postMseFinish(message)
-      .then((res) => sendResponse({ success: true, result: res }))
-      .catch((err) => sendResponse({ success: false, error: err.message }));
-    return true;
-  }
 });
-
-// In-flight POST chains per upload+track (see MSE_CHUNK above).
-const msePostChains = new Map();
-
-async function postMseChunk(message) {
-  const params = new URLSearchParams({
-    uploadId: message.uploadId || "",
-    track: message.track === "audio" ? "audio" : "video",
-    seq: String(message.seq || 0)
-  });
-  const response = await fetch(`${APP_SERVER_URL.replace("/api/download", "/api/segment")}?${params}`, {
-    method: "POST",
-    body: message.data
-  });
-  if (!response.ok) {
-    throw new Error(`segment rejected: ${response.status}`);
-  }
-}
-
-async function postMseFinish(message) {
-  const params = new URLSearchParams({
-    uploadId: message.uploadId || "",
-    reason: message.reason || "stop"
-  });
-  const response = await fetch(`${APP_SERVER_URL.replace("/api/download", "/api/finish")}?${params}`, {
-    method: "POST"
-  });
-  if (!response.ok) {
-    throw new Error(`finish rejected: ${response.status}`);
-  }
-  return await response.json();
-}
 
 async function sendToDesktopApp(payload, tabId) {
   // Hand the app the live browser session: cookie-DB export (yt-dlp

@@ -1,10 +1,24 @@
-# Silent end-to-end download test for Pornbox 1080p streams:
-# Mints fresh 1080p stream URLs from Pornbox API (mimicking companion extension DOM sniff),
-# POSTs an extension-shaped payload to the app bridge (no dialog),
-# polls startup.log to a terminal state (END OK), and verifies the output with ffprobe.
+# Silent end-to-end download test for gated direct-MP4 streams:
+# Mints a fresh stream URL from a site's media JSON API (mimicking companion
+# extension DOM sniff), POSTs an extension-shaped payload to the app bridge
+# (no dialog), polls startup.log to a terminal state (END OK), and verifies
+# the output with ffprobe.
 #
-# Usage: python silent_pornbox_test.py [video_id=216006] [quality=1080p]
+# Generic by design: every site-specific value arrives via CLI flags. Never
+# hardcode site hosts, page paths, or API routes in this file.
+#
+# Usage:
+#   python silent_gated_mp4_test.py --page-url <watch page>
+#       --stream-url <stream JSON template, {id} and {media_id} placeholders>
+#       [--meta-url <metadata JSON template, {id} placeholder>]
+#       [--meta-media-key <dotted path, list indices allowed; default medias.0.media_id>]
+#       [--id <content id>] [--quality 1080p] [--title <fallback title>]
+#
+# The stream endpoint must return JSON with a `qualities` array whose items
+# carry the file in `src` (or `url`/`file`) and the label in `quality`
+# (or `size`/`label`).
 
+import argparse
 import json
 import os
 import re
@@ -20,10 +34,13 @@ LOG = os.path.expandvars(r'%LOCALAPPDATA%\WrenchDownloader\startup.log')
 HISTORY = os.path.expandvars(r'%LOCALAPPDATA%\WrenchDownloader\history.json')
 POLL_INTERVAL = 2
 TIMEOUT_SEC = 180
+UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36'
+
 
 def fail(msg, code=1):
-    print(f'PORNBOX-TEST FAIL: {msg}')
+    print(f'GATEDMP4-TEST FAIL: {msg}')
     sys.exit(code)
+
 
 def bridge_up():
     try:
@@ -32,71 +49,83 @@ def bridge_up():
     except Exception:
         return False
 
-def get_pornbox_stream(video_id, target_quality='1080p'):
+
+def fetch_json(url, referer):
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
-
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+        'User-Agent': UA,
         'Accept': 'application/json, text/plain, */*',
-        'Referer': f'https://pornbox.com/application/watch-page/{video_id}',
+        'Referer': referer,
     }
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+        return json.loads(resp.read().decode('utf-8', errors='ignore'))
 
-    # 1. Fetch content metadata
-    content_url = f'https://pornbox.com/contents/{video_id}'
-    req = urllib.request.Request(content_url, headers=headers)
+
+def dig(obj, path):
+    cur = obj
+    for part in path.split('.'):
+        if isinstance(cur, list):
+            try:
+                cur = cur[int(part)]
+            except (ValueError, IndexError):
+                return None
+        elif isinstance(cur, dict):
+            cur = cur.get(part)
+        else:
+            return None
+        if cur is None:
+            return None
+    return cur
+
+
+def mint_stream(args):
+    media_id = ''
+    title = args.title
+    if args.meta_url:
+        try:
+            meta = fetch_json(args.meta_url.format(id=args.id), args.page_url)
+        except Exception as e:
+            fail(f'Failed to fetch content metadata: {e}')
+        media_id = str(dig(meta, args.meta_media_key) or '')
+        if not media_id:
+            fail(f'Metadata key {args.meta_media_key!r} yielded no media id')
+        if not title:
+            title = str(meta.get('title') or meta.get('name') or f'Gated_Video_{args.id}')
+    if not title:
+        title = f'Gated_Video_{args.id}'
+
+    stream_url = args.stream_url.format(id=args.id, media_id=media_id)
     try:
-        with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
-            content_data = json.loads(resp.read().decode('utf-8', errors='ignore'))
+        stream_data = fetch_json(stream_url, args.page_url)
     except Exception as e:
-        fail(f'Failed to fetch Pornbox content metadata for {video_id}: {e}')
-
-    scene_name = content_data.get('scene_name') or f'Pornbox_Video_{video_id}'
-    medias = content_data.get('medias', [])
-    if not medias:
-        fail(f'No medias found for video {video_id}')
-
-    # Find media with trailer or full video
-    media_item = next((m for m in medias if m.get('type') == 'free' or 'trailer' in str(m.get('title', '')).lower()), None)
-    if not media_item:
-        media_item = medias[0]
-
-    media_id = media_item.get('media_id')
-    if not media_id:
-        fail(f'No media_id found for video {video_id}')
-
-    # 2. Fetch stream endpoint
-    stream_url = f'https://pornbox.com/media/{media_id}/stream'
-    req = urllib.request.Request(stream_url, headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
-            stream_data = json.loads(resp.read().decode('utf-8', errors='ignore'))
-    except Exception as e:
-        fail(f'Failed to fetch stream data for media {media_id}: {e}')
+        fail(f'Failed to fetch stream data: {e}')
 
     qualities = stream_data.get('qualities', [])
     if not qualities:
-        fail(f'No stream qualities returned for media {media_id}')
+        fail('No stream qualities returned by stream endpoint')
 
-    # Pick matching quality
-    q_entry = next((q for q in qualities if target_quality in str(q.get('quality', '')).lower() or target_quality in str(q.get('size', '')).lower()), None)
+    q_entry = next((q for q in qualities
+                    if args.quality.lower() in str(q.get('quality', '')).lower()
+                    or args.quality.lower() in str(q.get('size', '')).lower()), None)
     if not q_entry:
-        # Fallback to highest available
         q_entry = qualities[-1]
 
-    direct_url = q_entry.get('src')
-    actual_quality = q_entry.get('size') or q_entry.get('quality') or target_quality
-    if not actual_quality.endswith('p') and actual_quality.isdigit():
+    direct_url = q_entry.get('src') or q_entry.get('url') or q_entry.get('file')
+    if not direct_url:
+        fail('Chosen quality entry carries no stream URL')
+    actual_quality = str(q_entry.get('size') or q_entry.get('quality') or q_entry.get('label') or args.quality)
+    if actual_quality.isdigit():
         actual_quality = f'{actual_quality}p'
 
-    page_url = f'https://pornbox.com/application/watch-page/{video_id}'
-    print(f'[+] Minted Pornbox stream: video_id={video_id} media_id={media_id} quality={actual_quality}')
+    print(f'[+] Minted stream: quality={actual_quality}')
     print(f'[+] Direct URL: {direct_url[:80]}...')
-    return direct_url, actual_quality, scene_name, page_url
+    return direct_url, actual_quality, title
+
 
 def post_download(video_url, quality, title, page_url):
-    # Construct companion extension shaped payload
     payload = {
         'url': video_url,
         'title': f'{title} - {quality}',
@@ -104,7 +133,7 @@ def post_download(video_url, quality, title, page_url):
         'format': 'mp4',
         'pageUrl': page_url,
         'referrer': page_url,
-        'userAgent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+        'userAgent': UA,
         'audioUrl': '',
         'audioReferrer': '',
         'prompt': False,
@@ -120,6 +149,7 @@ def post_download(video_url, quality, title, page_url):
             return res.get('id')
     except Exception as e:
         fail(f'Bridge POST failed: {e}')
+
 
 def wait_terminal(track_id, start_pos=0):
     deadline = time.time() + TIMEOUT_SEC
@@ -157,6 +187,7 @@ def wait_terminal(track_id, start_pos=0):
 
     fail(f'Timed out waiting for download to complete after {TIMEOUT_SEC}s')
 
+
 def verify_output(track_id, expected_quality):
     entry = None
     for _ in range(15):
@@ -182,7 +213,6 @@ def verify_output(track_id, expected_quality):
     if file_size < 1024 * 1024:
         fail(f'File size is suspiciously small: {file_size} bytes')
 
-    # ffprobe probe streams
     try:
         cmd = [
             'ffprobe', '-v', 'error',
@@ -211,30 +241,38 @@ def verify_output(track_id, expected_quality):
     if height != want_h:
         fail(f'Resolution mismatch: expected {want_h}p, got {height}p')
 
-    # Check audio stream
     has_audio = 'codec_type=audio' in ff_out
     print(f'[+] Audio stream present: {has_audio}')
     if not has_audio:
         print('[!] Warning: no audio stream detected in media')
 
-    print(f'=== SUCCESS: PORNBOX {expected_quality} SILENT DOWNLOAD VERIFIED ===')
+    print(f'=== SUCCESS: GATED MP4 {expected_quality} SILENT DOWNLOAD VERIFIED ===')
     return 0
 
+
 def main():
-    vid = int(sys.argv[1]) if len(sys.argv) > 1 else 216006
-    quality = sys.argv[2] if len(sys.argv) > 2 else '1080p'
+    ap = argparse.ArgumentParser(description='Silent gated direct-MP4 download test (all site values via flags).')
+    ap.add_argument('--page-url', required=True)
+    ap.add_argument('--stream-url', required=True)
+    ap.add_argument('--meta-url', default='')
+    ap.add_argument('--meta-media-key', default='medias.0.media_id')
+    ap.add_argument('--id', default='')
+    ap.add_argument('--quality', default='1080p')
+    ap.add_argument('--title', default='')
+    args = ap.parse_args()
 
     if not bridge_up():
         fail('WrenchDownloader bridge is offline on port 45732')
 
-    video_url, actual_q, title, page_url = get_pornbox_stream(vid, quality)
+    video_url, actual_q, title = mint_stream(args)
     start_pos = os.path.getsize(LOG) if os.path.exists(LOG) else 0
-    track_id = post_download(video_url, actual_q, title, page_url)
+    track_id = post_download(video_url, actual_q, title, args.page_url)
     print(f'[+] POSTed download to bridge: track_id={track_id}')
 
     wait_terminal(track_id, start_pos)
     ret = verify_output(track_id, actual_q)
     sys.exit(ret)
+
 
 if __name__ == '__main__':
     main()

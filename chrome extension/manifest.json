@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Wrench Downloader Companion",
+  "name": "Wrench Downloader Companion debug",
   "version": "26.2.4",
   "description": "Intercepts file downloads and sniffs video/audio streams, sending them to Wrench Downloader like IDM.",
   "permissions": [

@@ -6,7 +6,7 @@ namespace WrenchDownloader;
 
 /// <summary>
 /// Lightweight Win32 System Tray helper for unpackaged WinUI 3 desktop applications.
-/// Manages tray icon lifecycle, click detection, and popup context menu.
+/// Manages tray icon lifecycle, click detection, and popup context menu safely.
 /// </summary>
 public sealed class TrayIconHelper : IDisposable
 {
@@ -16,7 +16,6 @@ public sealed class TrayIconHelper : IDisposable
     private const uint NIM_ADD = 0x00000000;
     private const uint NIM_MODIFY = 0x00000001;
     private const uint NIM_DELETE = 0x00000002;
-    private const uint NIM_SETVERSION = 0x00000004;
 
     private const uint NIF_MESSAGE = 0x00000001;
     private const uint NIF_ICON = 0x00000002;
@@ -26,7 +25,6 @@ public sealed class TrayIconHelper : IDisposable
     private const int WM_LBUTTONDBLCLK = 0x0203;
     private const int WM_RBUTTONUP = 0x0205;
 
-    private const uint MF_BYCOMMAND = 0x00000000;
     private const uint MF_STRING = 0x00000000;
     private const uint MF_SEPARATOR = 0x00000800;
 
@@ -67,7 +65,7 @@ public sealed class TrayIconHelper : IDisposable
         public int y;
     }
 
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool Shell_NotifyIcon(uint dwMessage, ref NOTIFYICONDATA lpData);
 
     [DllImport("user32.dll", SetLastError = true)]
@@ -84,6 +82,9 @@ public sealed class TrayIconHelper : IDisposable
 
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern uint TrackPopupMenuEx(IntPtr hMenu, uint uFlags, int x, int y, IntPtr hWnd, IntPtr lpTPMParams);
@@ -119,12 +120,15 @@ public sealed class TrayIconHelper : IDisposable
     {
         _hWnd = hWnd;
         _subclassProc = WndProc;
-        SetWindowSubclass(_hWnd, _subclassProc, 101, 0);
+        if (_hWnd != IntPtr.Zero)
+        {
+            SetWindowSubclass(_hWnd, _subclassProc, 101, 0);
+        }
     }
 
     public void Initialize(string tip = "Wrench Downloader")
     {
-        if (_isCreated) return;
+        if (_isCreated || _hWnd == IntPtr.Zero) return;
 
         string iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets", "AppIcon.ico");
         if (File.Exists(iconPath))
@@ -144,26 +148,36 @@ public sealed class TrayIconHelper : IDisposable
         };
 
         _isCreated = Shell_NotifyIcon(NIM_ADD, ref nid);
+        int err = Marshal.GetLastWin32Error();
+        try { File.AppendAllText(PortablePaths.StartupLogPath, $"[{DateTime.Now}] Shell_NotifyIcon created={_isCreated} err={err} hWnd=0x{_hWnd:X}\n"); } catch { }
     }
 
     private IntPtr WndProc(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam, nuint uIdSubclass, nuint dwRefData)
     {
-        if (uMsg == WM_TRAYICON)
+        try
         {
-            int eventId = lParam.ToInt32() & 0xFFFF;
-            if (eventId == WM_LBUTTONUP || eventId == WM_LBUTTONDBLCLK)
+            if (uMsg == WM_TRAYICON)
             {
-                OnOpenRequested?.Invoke();
-                return IntPtr.Zero;
+                int eventId = lParam.ToInt32() & 0xFFFF;
+                if (eventId == WM_LBUTTONUP || eventId == WM_LBUTTONDBLCLK)
+                {
+                    OnOpenRequested?.Invoke();
+                    return IntPtr.Zero;
+                }
+                else if (eventId == WM_RBUTTONUP)
+                {
+                    ShowContextMenu();
+                    return IntPtr.Zero;
+                }
             }
-            else if (eventId == WM_RBUTTONUP)
-            {
-                ShowContextMenu();
-                return IntPtr.Zero;
-            }
-        }
 
-        return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+            return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+        }
+        catch (Exception ex)
+        {
+            try { File.AppendAllText(PortablePaths.StartupLogPath, $"[{DateTime.Now}] WndProc EXCEPTION: {ex}\n"); } catch { }
+            return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+        }
     }
 
     private void ShowContextMenu()
@@ -173,7 +187,7 @@ public sealed class TrayIconHelper : IDisposable
 
         try
         {
-            AppendMenu(hMenu, MF_STRING, CMD_OPEN, "Open Wrench Downloader");
+            AppendMenu(hMenu, MF_STRING, CMD_OPEN, "Open app");
             AppendMenu(hMenu, MF_STRING, CMD_SETTINGS, "Settings");
             AppendMenu(hMenu, MF_SEPARATOR, 0, null);
             AppendMenu(hMenu, MF_STRING, CMD_EXIT, "Exit");
@@ -182,6 +196,7 @@ public sealed class TrayIconHelper : IDisposable
             SetForegroundWindow(_hWnd);
 
             uint selected = TrackPopupMenuEx(hMenu, TPM_RIGHTBUTTON | TPM_RETURNCMD, pt.x, pt.y, _hWnd, IntPtr.Zero);
+            PostMessage(_hWnd, 0 /* WM_NULL */, IntPtr.Zero, IntPtr.Zero);
             switch (selected)
             {
                 case CMD_OPEN:
@@ -227,6 +242,13 @@ public sealed class TrayIconHelper : IDisposable
         if (_disposed) return;
         _disposed = true;
         Remove();
-        RemoveWindowSubclass(_hWnd, _subclassProc, 101);
+        try
+        {
+            if (_hWnd != IntPtr.Zero)
+            {
+                RemoveWindowSubclass(_hWnd, _subclassProc, 101);
+            }
+        }
+        catch { }
     }
 }

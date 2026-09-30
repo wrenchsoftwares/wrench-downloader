@@ -170,7 +170,30 @@
       const hasManifest = bodyText.includes("hlsManifestUrl") || bodyText.includes("dashManifestUrl") ||
         bodyText.includes("manifest.googlevideo.com") || bodyText.includes("hls_playlist");
       const hasStreaming = bodyText.includes("streamingData");
-      if (!hasPlayback && !hasManifest && !hasStreaming) return;
+      const hasGenericStreams = (bodyText.includes('"qualities"') || bodyText.includes('"sources"') || bodyText.includes('"transcodings"')) ||
+        ((bodyText.includes('.mp4') || bodyText.includes('.m3u8') || bodyText.includes('.mpd')) &&
+         (bodyText.includes('"src"') || bodyText.includes('"url"') || bodyText.includes('"file"')));
+
+      if (!hasPlayback && !hasManifest && !hasStreaming && !hasGenericStreams) return;
+
+      if (hasGenericStreams) {
+        try {
+          const gdata = JSON.parse(bodyText);
+          const glist = gdata.qualities || (gdata.result && gdata.result.qualities) || gdata.sources || gdata.transcodings;
+          if (Array.isArray(glist)) {
+            glist.forEach(item => {
+              const u = item.src || item.url || item.file;
+              if (u && typeof u === "string" && /^https?:\/\//i.test(u)) {
+                let q = item.quality || item.size || item.video_mode || item.label || "";
+                const m = String(q).match(/(\d{3,4})/);
+                const qualityStr = m ? `${parseInt(m[1], 10)}p` : String(q);
+                notifyStream(u, (u.includes(".m3u8") ? "hls" : u.includes(".mpd") ? "dash" : "video"), { quality: qualityStr });
+              }
+            });
+          }
+        } catch (e) {}
+      }
+
       if (hasStreaming || isPlayerApi) {
         try {
           const data = JSON.parse(bodyText);
@@ -231,6 +254,23 @@
   }
   }
 
+  // Embedded player data (initial HTML / SPA state): the /player fetch may
+  // have fired before this hook installed. Harvest it directly so the
+  // quality ladder is complete even with zero observed network calls.
+  function harvestEmbeddedPlayerResponse() {
+    try {
+      const pr = window.ytInitialPlayerResponse;
+      if (!pr || !pr.streamingData) return;
+      notifyPlayerResponse(JSON.stringify(pr));
+    } catch (e) {}
+  }
+  try { setTimeout(harvestEmbeddedPlayerResponse, 2500); } catch (e) {}
+  try {
+    window.addEventListener("__WRENCH_HARVEST_PLAYER__", () => {
+      try { harvestEmbeddedPlayerResponse(); } catch (e) {}
+    });
+  } catch (e) {}
+
   // 3. Hook HTMLMediaElement src
   try {
     const origSrcDesc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, "src");
@@ -245,105 +285,6 @@
         get: origSrcDesc.get,
         configurable: true
       });
-    }
-  } catch (e) {}
-
-  // 4. MSE transport-agnostic capture (the advanced path).
-  // Whatever the transport (SABR GETs, UMS POST streams, plain ranges), every
-  // playable byte funnels through SourceBuffer.appendBuffer. While a recording
-  // is armed, copy each appended segment per track and forward it; the app
-  // reassembles + muxes. One recording per page (the video being captured).
-  const mseState = { armed: false, uploadId: "", seq: { video: 0, audio: 0 }, bytes: { video: 0, audio: 0 } };
-  const MSE_SLICE = 262144; // 256 KB slices keep every clone cheap
-  const MSE_MAX_BYTES = 2147483648; // 2 GB per track safety cap
-  let mseSbTrack = null;
-  try { mseSbTrack = new WeakMap(); } catch (e) {}
-
-  window.addEventListener("__WRENCH_MSE_CONTROL__", (e) => {
-    try {
-      const cmd = (e && e.detail && e.detail.cmd) || "";
-      if (cmd === "start") {
-        mseState.armed = true;
-        mseState.uploadId = String((e.detail && e.detail.uploadId) || "");
-        mseState.seq = { video: 0, audio: 0 };
-        mseState.bytes = { video: 0, audio: 0 };
-      } else if (cmd === "stop") {
-        mseState.armed = false;
-        mseState.uploadId = "";
-      }
-    } catch (err) {}
-  });
-
-  function mseTrackOf(sb) {
-    try {
-      if (mseSbTrack && mseSbTrack.has(sb)) return mseSbTrack.get(sb);
-      // Fallback for buffers predating the hook: real track lists.
-      try {
-        if (sb && sb.audioTracks && sb.audioTracks.length > 0) return "audio";
-        if (sb && sb.videoTracks && sb.videoTracks.length > 0) return "video";
-      } catch (e) {}
-    } catch (e) {}
-    return "video";
-  }
-
-  function mseEmit(track, buffer) {
-    try {
-      if (!mseState.armed || !mseState.uploadId || !buffer || buffer.byteLength === 0) return;
-      if (mseState.bytes[track] >= MSE_MAX_BYTES) return;
-      let offset = 0;
-      while (offset < buffer.byteLength) {
-        const end = Math.min(offset + MSE_SLICE, buffer.byteLength);
-        const slice = buffer.slice(offset, end);
-        offset = end;
-        mseState.bytes[track] += slice.byteLength;
-        window.dispatchEvent(new CustomEvent("__WRENCH_MSE_CHUNK__", {
-          detail: {
-            uploadId: mseState.uploadId,
-            track: track,
-            seq: mseState.seq[track]++,
-            data: slice
-          }
-        }));
-      }
-    } catch (e) {}
-  }
-
-  try {
-    if (window.MediaSource && MediaSource.prototype.addSourceBuffer) {
-      const origAddSB = MediaSource.prototype.addSourceBuffer;
-      MediaSource.prototype.addSourceBuffer = function (mime) {
-        let sb = null;
-        try { sb = origAddSB.apply(this, arguments); } catch (err) { throw err; }
-        try {
-          if (mseSbTrack && sb) {
-            mseSbTrack.set(sb, /^audio\//i.test(String(mime || "")) ? "audio" : "video");
-          }
-          if (mseState.armed) {
-            window.dispatchEvent(new CustomEvent("__WRENCH_MSE_TRACK__", {
-              detail: { uploadId: mseState.uploadId, track: mseTrackOf(sb), mime: String(mime || "") }
-            }));
-          }
-        } catch (e) {}
-        return sb;
-      };
-    }
-    if (window.SourceBuffer && SourceBuffer.prototype.appendBuffer) {
-      const origAppend = SourceBuffer.prototype.appendBuffer;
-      SourceBuffer.prototype.appendBuffer = function (data) {
-        try {
-          if (mseState.armed && data) {
-            let buf = null;
-            if (data instanceof ArrayBuffer) {
-              buf = data.slice(0);
-            } else if (ArrayBuffer.isView(data)) {
-              try { buf = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength); }
-              catch (err) { buf = null; }
-            }
-            if (buf) mseEmit(mseTrackOf(this), buf);
-          }
-        } catch (e) {}
-        return origAppend.apply(this, arguments);
-      };
     }
   } catch (e) {}
 })();

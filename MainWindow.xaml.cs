@@ -73,13 +73,17 @@ public sealed partial class MainWindow : Window
             SaveHistoryToFile();
         };
 
-        // Initialize System Tray
-        // InitTrayIcon();
+        // Initialize System Tray (Release only: Debug builds exit directly
+        // on close with no tray icon so dev cycles never strand the window).
+#if !DEBUG
+        InitTrayIcon();
+#endif
 
         // Handle Close button / Alt+F4
         AppWindow.Closing += (sender, args) =>
         {
             try { System.IO.File.AppendAllText(PortablePaths.StartupLogPath, $"[{System.DateTime.Now}] APPWINDOW CLOSING FIRED. isExplicit={_isExplicitExit}, CloseToTray={SettingsHelper.CloseToTray}\n"); } catch { }
+#if !DEBUG
             if (!_isExplicitExit && SettingsHelper.CloseToTray)
             {
                 args.Cancel = true;
@@ -89,6 +93,10 @@ public sealed partial class MainWindow : Window
             {
                 _trayIcon?.Dispose();
             }
+#else
+            // Debug: no tray exists, so closing always exits directly.
+            _trayIcon?.Dispose();
+#endif
         };
 
         // Start Extension Bridge Server
@@ -151,6 +159,7 @@ public sealed partial class MainWindow : Window
     {
         try
         {
+            System.IO.File.AppendAllText(PortablePaths.StartupLogPath, $"[{System.DateTime.Now}] InitTrayIcon START\n");
             IntPtr hWnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
             _trayIcon = new TrayIconHelper(hWnd);
             _trayIcon.OnOpenRequested += () => DispatcherQueue.TryEnqueue(RestoreAndShow);
@@ -161,12 +170,20 @@ public sealed partial class MainWindow : Window
             });
             _trayIcon.OnExitRequested += () => DispatcherQueue.TryEnqueue(ExitApplication);
             _trayIcon.Initialize("Wrench Downloader");
+            System.IO.File.AppendAllText(PortablePaths.StartupLogPath, $"[{System.DateTime.Now}] InitTrayIcon FINISHED\n");
         }
         catch (Exception ex)
         {
+            System.IO.File.AppendAllText(PortablePaths.StartupLogPath, $"[{System.DateTime.Now}] InitTrayIcon EXCEPTION: {ex}\n");
             Debug.WriteLine($"Failed to init tray icon: {ex.Message}");
         }
     }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
     public void RestoreAndShow()
     {
@@ -179,6 +196,13 @@ public sealed partial class MainWindow : Window
             }
         }
         Activate();
+        try
+        {
+            IntPtr hWnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+            ShowWindow(hWnd, 9 /* SW_RESTORE */);
+            SetForegroundWindow(hWnd);
+        }
+        catch { }
     }
 
     public void ExitApplication()
@@ -189,8 +213,7 @@ public sealed partial class MainWindow : Window
         SaveHistoryToFile();
         try { _bridgeServer?.Stop(); } catch { }
         _downloadQueueTimer?.Stop();
-        AppWindow.Destroy();
-        Application.Current.Exit();
+        Close();
     }
 
     private void LoadHistory()

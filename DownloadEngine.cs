@@ -35,17 +35,6 @@ public class DownloadEngine
         TrackStart(item);
 #endif
 
-        // MSE recording items are assembled by the bridge (/api/segment +
-        // /api/finish) as the page plays - the engine must not touch them.
-        if (!string.IsNullOrEmpty(item.MseUploadId))
-        {
-            item.Status = DownloadStatus.Downloading;
-            item.SpeedText = AppLocalization.Get("download.resolving");
-            item.StatusText = "Recording stream - play the video through";
-            item.EtaText = "--";
-            return;
-        }
-
         string configuredDownloadFolder = SettingsHelper.DownloadFolder;
         string downloadsFolder = item.TargetFolder;
         if (string.IsNullOrWhiteSpace(downloadsFolder) || !Directory.Exists(downloadsFolder))
@@ -184,6 +173,36 @@ public class DownloadEngine
             return url + (url.Contains('?') ? "&" : "?") + "pot=" + token;
         }
         catch { return url; }
+    }
+
+    /// <summary>
+    /// YouTube media-request auth (what a network-layer capture replays):
+    /// googlevideo hosts never receive youtube.com cookies, so the browser
+    /// proves the login with SAPISIDHASH instead. Built from the live
+    /// extension session (SAPISID); empty when no session or non-googlevideo.
+    /// </summary>
+    private static (string Authz, string XOrigin) SapisidHashAuth(List<BrowserCookie>? cookies, string? url)
+    {
+        try
+        {
+            string host;
+            try { host = new Uri(url ?? "").Host; } catch { return ("", ""); }
+            if (!host.Equals("googlevideo.com", StringComparison.OrdinalIgnoreCase) &&
+                !host.EndsWith(".googlevideo.com", StringComparison.OrdinalIgnoreCase))
+                return ("", "");
+            string? sapisid = cookies?.FirstOrDefault(c =>
+                c.Name.Equals("__Secure-3PAPISID", StringComparison.OrdinalIgnoreCase))?.Value;
+            sapisid ??= cookies?.FirstOrDefault(c =>
+                c.Name.Equals("SAPISID", StringComparison.OrdinalIgnoreCase))?.Value;
+            if (string.IsNullOrWhiteSpace(sapisid)) return ("", "");
+            const string origin = "https://www.youtube.com";
+            long ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            using var sha1 = System.Security.Cryptography.SHA1.Create();
+            byte[] hash = sha1.ComputeHash(Encoding.UTF8.GetBytes($"{ts} {sapisid.Trim()} {origin}"));
+            string hex = Convert.ToHexString(hash).ToLowerInvariant();
+            return ($"SAPISIDHASH {ts}_{hex}", origin);
+        }
+        catch { return ("", ""); }
     }
 
     private static string BuildCookieHeader(List<BrowserCookie>? cookies, string? requestUrl = null)
@@ -326,6 +345,11 @@ public class DownloadEngine
         string cookieHeader = hasCapturedBrowserHeaders
             ? streamHeaders.FirstOrDefault(h => h.Key.Equals("Cookie", StringComparison.OrdinalIgnoreCase)).Value ?? ""
             : BuildCookieHeader(item.Cookies, videoUrl);
+        // googlevideo authorizes the login via SAPISIDHASH, never cookies -
+        // attach it whenever the live session has SAPISID (IDM-equivalent).
+        var (sapisidAuthz, sapisidOrigin) = SapisidHashAuth(item.Cookies, videoUrl);
+        if (!string.IsNullOrEmpty(sapisidAuthz))
+            LogDiag(item, "SAPISIDHASH session auth attached for googlevideo");
         string referer = !string.IsNullOrWhiteSpace(item.Referrer) ? item.Referrer
             : !string.IsNullOrWhiteSpace(item.PageUrl) ? item.PageUrl
             : "https://www.youtube.com/";
@@ -458,6 +482,10 @@ public class DownloadEngine
                 AddHeader("Cookie", cookieHeader);
                 AddHeader("User-Agent", userAgent);
                 AddHeader("Referer", referer);
+                if (!string.IsNullOrEmpty(sapisidAuthz))
+                    AddHeader("Authorization", sapisidAuthz);
+                if (!string.IsNullOrEmpty(sapisidOrigin))
+                    AddHeader("X-Origin", sapisidOrigin);
                 AddArg("--", url);
 
                 process = Process.Start(psi);
@@ -545,6 +573,11 @@ public class DownloadEngine
                 req.Headers.TryAddWithoutValidation("Accept-Language", "en-US,en;q=0.9");
                 if (!string.IsNullOrEmpty(cookieHeader))
                     req.Headers.TryAddWithoutValidation("Cookie", cookieHeader);
+            }
+            if (!req.Headers.Contains("Authorization") && !string.IsNullOrEmpty(sapisidAuthz))
+            {
+                req.Headers.TryAddWithoutValidation("Authorization", sapisidAuthz);
+                req.Headers.TryAddWithoutValidation("X-Origin", sapisidOrigin);
             }
             HttpResponseMessage resp;
             try
@@ -801,6 +834,12 @@ public class DownloadEngine
             req.Headers.TryAddWithoutValidation("Accept-Language", "en-US,en;q=0.9");
             if (!string.IsNullOrEmpty(cookieHeader))
                 req.Headers.TryAddWithoutValidation("Cookie", cookieHeader);
+            var (sabrSapisidAuthz, sabrSapisidOrigin) = SapisidHashAuth(item.Cookies, url);
+            if (!req.Headers.Contains("Authorization") && !string.IsNullOrEmpty(sabrSapisidAuthz))
+            {
+                req.Headers.TryAddWithoutValidation("Authorization", sabrSapisidAuthz);
+                req.Headers.TryAddWithoutValidation("X-Origin", sabrSapisidOrigin);
+            }
             var (rs, re) = ParseRangeStart(range);
             if (rs != long.MaxValue)
                 req.Headers.Range = new RangeHeaderValue(rs, re);
@@ -1159,6 +1198,9 @@ public class DownloadEngine
         // directly with the live browser session and mux - zero page
         // re-resolve, which is precisely what age/login gates block.
         // yt-dlp below remains as the fallback when this fails.
+        // IDM freshness: a capture proven dead here must not be re-tried
+        // through yt-dlp (wastes a cycle on curl-DNS errors) - page stays.
+        var deadLinkHosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (!item.DownloadPlaylist && !isAudio && IsExtensionResolvedPlayback(item))
         {
             try
@@ -1171,6 +1213,13 @@ public class DownloadEngine
             catch (Exception ex)
             {
                 LogDiag(item, $"extension-resolved direct failed, falling back to yt-dlp: {ex.Message}");
+                string em = ex.Message ?? "";
+                if (em.Contains("does not resolve", StringComparison.OrdinalIgnoreCase) ||
+                    em.Contains("link expired", StringComparison.OrdinalIgnoreCase))
+                {
+                    try { deadLinkHosts.Add(new Uri(item.Url).Host); } catch { }
+                    LogDiag(item, "dead capture dropped from yt-dlp plan, page fallback only");
+                }
                 item.Progress = 0;
                 item.SavePath = "";
                 item.Status = DownloadStatus.Downloading;
@@ -1223,7 +1272,7 @@ public class DownloadEngine
         }
         // Maximize network buffer & chunking to avoid server-side rate-limiting and maximize throughput
         argsBuilder.Append("--buffer-size 64K --http-chunk-size 10M --throttled-rate 100K ");
-        // Chrome TLS fingerprint: CDNs (e.g. phncdn) reject python-requests
+        // Chrome TLS fingerprint: CDNs reject python-requests
         // fingerprints with 410/412 even when headers are perfect. Impersonating
         // Chrome makes yt-dlp's requests indistinguishable from the browser's.
         // Requires curl_cffi (bundled with yt-dlp); silently ignored otherwise.
@@ -1321,6 +1370,15 @@ public class DownloadEngine
                     if (!string.IsNullOrEmpty(token))
                         sessionCookieArgs += $"--extractor-args \"youtube:po_token=web.gvs+{token}\" ";
                 }
+                // googlevideo authorizes the login via SAPISIDHASH, never via
+                // youtube.com cookies (curl won't send those to the media host
+                // either) - attach it so signed-URL yt-dlp attempts carry it.
+                var (sapisidYtAuthz, sapisidYtOrigin) = SapisidHashAuth(item.Cookies, item.Url);
+                if (!string.IsNullOrEmpty(sapisidYtAuthz))
+                {
+                    sessionCookieArgs += $"--add-headers \"Authorization:{sapisidYtAuthz}\" --add-headers \"X-Origin:{sapisidYtOrigin}\" ";
+                    LogDiag(item, "SAPISIDHASH session auth attached to yt-dlp attempts");
+                }
                 LogDiag(item, $"browser session ready ({item.Cookies.Count} cookies)");
             }
         }
@@ -1371,7 +1429,15 @@ public class DownloadEngine
         }
         else
         {
-            if (!string.IsNullOrWhiteSpace(item.Url)) candidateUrls.Add(item.Url);
+            if (!string.IsNullOrWhiteSpace(item.Url))
+            {
+                bool deadCapture = false;
+                try { deadCapture = deadLinkHosts.Contains(new Uri(item.Url).Host); } catch { }
+                if (deadCapture)
+                    LogDiag(item, "skipping dead captured URL in yt-dlp plan");
+                else
+                    candidateUrls.Add(item.Url);
+            }
             if (!string.IsNullOrWhiteSpace(item.PageUrl) &&
                 !item.PageUrl.Equals(item.Url, StringComparison.OrdinalIgnoreCase))
             {
@@ -1591,8 +1657,9 @@ public class DownloadEngine
                     {
                         LogDiag(item, $"yt-dlp warning: {errLine}");
                     }
-                    // Browser-session unavailable (no Chrome, locked profile, ...):
-                    // cookie attempts would all fail identically, skip them.
+                    // Browser-session unavailable (no Chrome, locked profile,
+                    // app-bound cookie vault, ...): cookie attempts would all
+                    // fail identically, skip them.
                     // NB: only genuine export failures count. Extractor errors
                     // that merely ADVISE "--cookies-from-browser" (e.g. age or
                     // login walls) must NOT set this, or the queue head is
@@ -1601,6 +1668,15 @@ public class DownloadEngine
                         errLine.Contains("cookie", StringComparison.OrdinalIgnoreCase))
                     {
                         cookiesFailed = true;
+                    }
+                    else if (errLine.Contains("decrypt", StringComparison.OrdinalIgnoreCase) &&
+                        errLine.Contains("dpapi", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Chrome 127+ app-bound encryption: only the browser
+                        // process itself can read its vault. The live-tab
+                        // extension jar remains the working session path.
+                        cookiesFailed = true;
+                        LogDiag(item, "browser cookie vault unreadable (app-bound encryption), skipping profile-cookie attempts");
                     }
                     else if (errLine.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase) &&
                              errLine.Contains("cookies-from-browser", StringComparison.OrdinalIgnoreCase) &&
@@ -1755,7 +1831,9 @@ public class DownloadEngine
                 //  B. once an attempt carried a session yet still hit the
                 //     wall, keep the session and switch to an unchallenged
                 //     player client: web_safari (HLS needs no PO token),
-                //     then tv. Session + client answers both gates at once.
+                //     then tv. When clients are exhausted, fall through to a
+                //     full browser-profile export (chrome -> edge -> brave):
+                //     Session + client answers both gates at once.
                 // Skipped when cookie export itself is broken.
                 if (!cookiesFailed && IsGatedError(lastError))
                 {
@@ -1789,6 +1867,20 @@ public class DownloadEngine
                             LogDiag(item, $"session attached yet still gated, retrying {clientArgs.Trim()}");
                             nextArgs = clientArgs;
                         }
+                        else
+                        {
+                            // Player clients exhausted with the extension jar:
+                            // fall through to a full browser-profile export
+                            // (chrome -> edge -> brave), which carries complete
+                            // cookie attributes the hand-built jar may lack.
+                            string? nextBrowser = NextAuthBrowser(attempt.CookieArgs, attemptUrl, authBrowsersTried);
+                            if (nextBrowser != null)
+                            {
+                                authBrowsersTried.Add($"{attemptUrl}|{nextBrowser}");
+                                LogDiag(item, $"client variants exhausted, retrying with {nextBrowser} session");
+                                nextArgs = $"--cookies-from-browser {nextBrowser} ";
+                            }
+                        }
                     }
                     if (nextArgs != null)
                     {
@@ -1807,7 +1899,9 @@ public class DownloadEngine
                 }
                 // Client-variant chain continuation: a player_client attempt
                 // failed with anything (e.g. "format not available") - move to
-                // the next client instead of giving up. Bounded by tried-set.
+                // the next client instead of giving up. When clients are
+                // exhausted, try a full browser-profile export before failing.
+                // Bounded by tried-set.
                 if (!cookiesFailed &&
                     (attempt.CookieArgs?.Contains("player_client", StringComparison.OrdinalIgnoreCase) ?? false) &&
                     (PotProviderHelper.IsYouTubeUrl(item.Url) || PotProviderHelper.IsYouTubeUrl(item.PageUrl)))
@@ -1821,6 +1915,23 @@ public class DownloadEngine
                         pendingUrls.Clear();
                         pendingUrls.Enqueue((attemptUrl, clientArgs));
                         foreach (var p in rest) pendingUrls.Enqueue(p);
+                        item.Progress = 0;
+                        item.SavePath = "";
+                        item.EtaText = "--";
+                        item.StatusText = AppLocalization.Get("download.resolving");
+                        item.SpeedText = AppLocalization.Get("download.resolving");
+                        continue;
+                    }
+                    string? profileBrowser = NextAuthBrowser(attempt.CookieArgs, attemptUrl, authBrowsersTried);
+                    if (profileBrowser != null)
+                    {
+                        authBrowsersTried.Add($"{attemptUrl}|{profileBrowser}");
+                        LogDiag(item, $"client variants exhausted, retrying with {profileBrowser} session");
+                        pendingUrls.Dequeue();
+                        var rest2 = pendingUrls.ToList();
+                        pendingUrls.Clear();
+                        pendingUrls.Enqueue((attemptUrl, $"--cookies-from-browser {profileBrowser} "));
+                        foreach (var p in rest2) pendingUrls.Enqueue(p);
                         item.Progress = 0;
                         item.SavePath = "";
                         item.EtaText = "--";
@@ -2535,7 +2646,7 @@ public class DownloadEngine
         return "ffmpeg";
     }
 
-    /// <summary>ffmpeg for the bridge's MSE finish mux (same resolution).</summary>
+    /// <summary>ffmpeg for track muxing (same resolution).</summary>
     public static string FfmpegPath => FindFfmpegPath();
 
     private static readonly Lazy<string> _cachedJsRuntimeArgs = new Lazy<string>(() =>

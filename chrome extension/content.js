@@ -34,6 +34,17 @@
         userAgent: navigator.userAgent,
         time: Date.now()
       };
+      if (e.detail.extra && e.detail.extra.quality) {
+        item.quality = e.detail.extra.quality;
+      }
+      // IDM-freshness: tag rendition-id captures with their height now, so
+      // quality matching at click time works even for bare network captures.
+      if (!item.quality) {
+        try {
+          const ih = getItagHeight(item.url);
+          if (ih > 0) item.quality = `${ih}p`;
+        } catch (e2) {}
+      }
 
       if (targetVideo) {
         if (!targetVideo._wrenchCapturedStreams) targetVideo._wrenchCapturedStreams = [];
@@ -70,92 +81,6 @@
   // playable file; the app fetches it explicitly via Range).
   const pagePlayerInitRanges = new Map(); // itag -> { init, index }
   let currentPlayerVideoId = "";
-
-  // MSE recording state (one per page): transport-agnostic capture.
-  // The user clicks Record, plays the video through, clicks Stop (or the
-  // video ends) - every appended media byte streams to the app, which
-  // reassembles + muxes. Works for SABR, UMS, anything MSE-based.
-  let pageMse = null; // { uploadId, title, pageUrl, video }
-  let mseTxCounter = 0;
-  const MSE_MAX_PENDING = 400;
-
-  function mseControl(cmd, uploadId) {
-    try {
-      window.dispatchEvent(new CustomEvent("__WRENCH_MSE_CONTROL__", {
-        detail: { cmd: cmd, uploadId: uploadId || "" }
-      }));
-    } catch (e) {}
-  }
-
-  window.addEventListener("__WRENCH_MSE_CHUNK__", (e) => {
-    try {
-      const d = (e && e.detail) || {};
-      if (!pageMse || !d.uploadId || d.uploadId !== pageMse.uploadId) return;
-      if (!d.data || d.data.byteLength === 0) return;
-      mseTxCounter++;
-      if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
-        chrome.runtime.sendMessage({
-          action: "MSE_CHUNK",
-          uploadId: d.uploadId,
-          track: d.track === "audio" ? "audio" : "video",
-          seq: d.seq || 0,
-          data: d.data
-        }).catch(() => {});
-      }
-      if (currentOpenMenu && currentOpenMenu._video) {
-        // Throttled: refresh occasionally so the row shows recording state.
-        if (mseTxCounter % 40 === 0) scheduleDropdownRefresh();
-      }
-    } catch (err) {}
-  });
-
-  function startMseRecording(video) {
-    try {
-      if (pageMse) stopMseRecording("restart");
-      const context = getVideoContext(video);
-      const uploadId = "mse-" + Date.now().toString(36) + "-" +
-        Math.random().toString(36).slice(2, 8);
-      pageMse = {
-        uploadId: uploadId,
-        title: (context && context.title) || getCleanVideoTitle(video),
-        pageUrl: (context && context.pageUrl) || window.location.href,
-        video: video || null,
-        startedAt: Date.now(),
-        chunks: 0
-      };
-      mseTxCounter = 0;
-      if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
-        chrome.runtime.sendMessage({
-          action: "MSE_BEGIN",
-          uploadId: uploadId,
-          title: pageMse.title,
-          pageUrl: pageMse.pageUrl,
-          referrer: pageMse.pageUrl,
-          userAgent: navigator.userAgent,
-          prompt: false
-        }).catch(() => {});
-      }
-      mseControl("start", uploadId);
-      if (currentOpenMenu) { currentOpenMenu.remove(); currentOpenMenu = null; }
-    } catch (e) {}
-  }
-
-  function stopMseRecording(reason) {
-    try {
-      if (!pageMse) return;
-      const uploadId = pageMse.uploadId;
-      mseControl("stop", uploadId);
-      pageMse = null;
-      if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
-        chrome.runtime.sendMessage({
-          action: "MSE_END",
-          uploadId: uploadId,
-          reason: reason || "stop"
-        }).catch(() => {});
-      }
-      if (currentOpenMenu) { currentOpenMenu.remove(); currentOpenMenu = null; }
-    } catch (e) {}
-  }
 
   // Signed URLs die at ?expire (unix seconds). Expired entries are worse
   // than missing: they download DNS errors instead of video.
@@ -294,6 +219,7 @@
   async function collectItemsForPopup() {
     const video = pickMainVideo();
     if (!video) return [];
+    try { window.dispatchEvent(new CustomEvent("__WRENCH_HARVEST_PLAYER__")); } catch (e) {}
     const { bgMedia, sabrSets } = await getBackgroundState();
     return getGenericVideoItems(video, bgMedia, sabrSets);
   }
@@ -483,14 +409,6 @@
     });
     video.addEventListener("pointerdown", () => {
       activeVideo = video;
-    });
-    // Auto-finish an MSE recording when playback ends (tail flushes first).
-    video.addEventListener("ended", () => {
-      try {
-        if (pageMse && pageMse.video === video) {
-          setTimeout(() => stopMseRecording("ended"), 3000);
-        }
-      } catch (e) {}
     });
     video.addEventListener("loadedmetadata", () => {
       sniffVideoSources(video);
@@ -1158,19 +1076,39 @@
         }
         return;
       }
+      // Resolve the playing rendition's own URL. directSrc IS the playing
+      // rendition; any other concrete candidate must prove its height
+      // matches h (or be a master carrying all renditions) - attaching a
+      // 360p URL to a 1080p label downloads the wrong file. With nothing
+      // concrete, keep a labeled via-page row so the quality stays offered
+      // (the app resolves it; a direct capture later replaces it).
+      const urlHeight = (u) => getItagHeight(u) || guessHeightFromUrl(u) || 0;
+      let bestUrl = "";
+      let bestViaPage = false;
+      if (directSrc && !directSrc.startsWith("blob:") && !directSrc.startsWith("data:") && !directSrc.startsWith("chrome-extension://")) {
+        bestUrl = directSrc;
+      } else {
+        const cands = [];
+        if (pagePlayerManifests[0] && !isExpiredStreamUrl(pagePlayerManifests[0].url)) cands.push(pagePlayerManifests[0].url);
+        if (streamCandidates[0] && !isExpiredStreamUrl(streamCandidates[0].url)) cands.push(streamCandidates[0].url);
+        if (validMedia.length > 0 && validMedia[0].url && !isExpiredStreamUrl(validMedia[0].url)) cands.push(validMedia[0].url);
+        bestUrl = cands.find(u => isMasterLike(u) || urlHeight(u) === h) || "";
+        if (!bestUrl) { bestUrl = postPageUrl; bestViaPage = true; }
+      }
+
       const w = videoWidth > 0 ? videoWidth : Math.round(h * 16 / 9);
       items.unshift({
         displayName: `${title} - ${label}.mp4`,
         title: `${title} - ${label}`,
         quality: label,
         format: "mp4",
-        url: postPageUrl,
+        url: bestUrl,
         pageUrl: postPageUrl,
         referrer: postPageUrl,
         userAgent: navigator.userAgent,
-              badge: label.toUpperCase(),
-              sub: `Currently playing • Res: (${w}x${h}) • via page`,
-              viaPage: true
+        badge: label.toUpperCase(),
+        sub: `Currently playing • Res: (${w}x${h})${bestViaPage ? " • via page" : ""}`,
+        viaPage: bestViaPage || undefined
       });
     };
 
@@ -1251,13 +1189,17 @@
           ladder.forEach(h => {
             const label = `${h}p`;
             const w = Math.round(h * 16 / 9);
+            // Fresh master serves every rendition directly; otherwise the
+            // page URL re-resolves the exact quality in the app (which can
+            // decipher) - a bare track/rendition URL cannot serve all labels.
             const viaPage = !freshMaster;
+            const streamUrl = freshMaster || postPageUrl;
             items.push({
               displayName: `${title} - ${label}.mp4`,
               title: `${title} - ${label}`,
               quality: label,
               format: "mp4",
-              url: freshMaster || postPageUrl,
+              url: streamUrl,
               pageUrl: postPageUrl,
               referrer: referrer,
               userAgent: userAgent,
@@ -1274,9 +1216,7 @@
           // the app merges full audio+video instead of a silent track.
           const res = getResolutionFromVideo(video);
           if (res) {
-            const downloadUrl = (isMasterLike(streamItem.url) || !postPageUrl)
-              ? streamItem.url
-              : (isRenditionLike(streamItem.url) ? postPageUrl : streamItem.url);
+            const downloadUrl = streamItem.url;
             items.push({
               displayName: `${title} - ${res.label}.mp4`,
               title: `${title} - ${res.label}`,
@@ -1317,9 +1257,7 @@
       }
     }
 
-    // (streamHeights seeded above with exact-stream heights, so page-resolve
-    // and direct rows never duplicate them.)
-    includeCurrentPlayingQuality();
+    // Seed streamHeights with already listed stream heights
     items.forEach(i => { const q = (i.quality || "").toLowerCase(); if (q) streamHeights.add(q); });
 
     // 2. Page-embedded direct files (freshest page-issued URLs first).
@@ -1451,6 +1389,9 @@
       });
     }
 
+    // Annotate or append currently playing quality with real video stream URL
+    includeCurrentPlayingQuality();
+
     // 5. Nothing captured (opaque player, uncaptured stream): fall back to the
     // specific post / page URL itself and let the app resolve it. Labeled from the ACTUAL playing
     // rendition, so the entry is always actionable on any page.
@@ -1485,41 +1426,6 @@
         sub: `Format: MP3 | Res: (Audio Only) • via page`,
         viaPage: true
       });
-    }
-
-    // MSE record row: the universal fallback. Transport-agnostic (SABR,
-    // UMS, anything MSE-based): records exactly what plays, at the quality
-    // the player is set to. Shown first when nothing directly downloadable
-    // was captured, last otherwise. Stop row while a recording runs.
-    const mseRecording = pageMse && pageMse.video === video;
-    if (mseRecording) {
-      items.unshift({
-        displayName: `${title} - Stop & save recording`,
-        title: `${title} - Recording`,
-        quality: "recording",
-        format: "mp4",
-        url: "",
-        isStopMse: true,
-        badge: "■ STOP",
-        sub: "Saves everything recorded so far into a video file"
-      });
-    } else {
-      const mseRow = {
-        displayName: `${title} - ● Record stream`,
-        title: `${title} - Recording`,
-        quality: "record",
-        format: "mp4",
-        url: "",
-        isStartMse: true,
-        badge: "● REC",
-        sub: "Set 1080p, play through - records exactly what plays"
-      };
-      const hasDirect = items.some(i =>
-        (i.segments && i.segments.length > 0) ||
-        (i.url && !String(i.url).includes("youtube.com/watch") &&
-         !String(i.url).includes("youtu.be/")));
-      if (hasDirect) items.push(mseRow);
-      else items.unshift(mseRow);
     }
 
     // A direct row upgrades (replaces) any via-page row of the same
@@ -1572,18 +1478,19 @@
     // The element's own src is the rendition the player actually chose
     // (here: the 1080p); <source> tags are just fallbacks. Flag it so it
     // can never sort below them.
-    pushSrc(video.src, "", true);
-    pushSrc(video.currentSrc, "", true);
+    const playingQ = video.videoHeight > 0 ? `${video.videoHeight}p` : "";
+    pushSrc(video.src, playingQ, true);
+    pushSrc(video.currentSrc, playingQ, true);
 
-    // <source> tags incl. their size="720" labels (exact rendition labels,
-    // e.g. Pornbox players) + shadow-DOM players.
+    // <source> tags incl. their size="720" labels (exact rendition labels
+    // declared by the player) + shadow-DOM players.
     const collectSources = (root) => {
       try {
         root.querySelectorAll("source").forEach((s) => {
           if (s.src) {
             let q = "";
             try {
-              const sizeAttr = s.getAttribute("size") || "";
+              const sizeAttr = s.getAttribute("size") || s.getAttribute("data-quality") || s.getAttribute("label") || s.getAttribute("title") || "";
               const m = String(sizeAttr).match(/(\d{3,4})/);
               if (m) q = `${parseInt(m[1], 10)}p`;
             } catch (e) {}
@@ -1649,17 +1556,8 @@
     // after init, so the scan-time snapshot may already be stale.
     try { sniffVideoSources(video); } catch (e) {}
 
-    // Blob: (MediaSource) players only fetch the real playlist once playing.
-    // Start it so the concrete stream gets captured; the open menu refreshes
-    // live when it arrives.
-    try {
-      const src = video.currentSrc || video.src || "";
-      if (src.startsWith("blob:") && video.paused) {
-        video.muted = true;
-        const pr = video.play();
-        if (pr && pr.catch) pr.catch(() => {});
-      }
-    } catch (e) {}
+    // Fresh sniff at click time without modifying playback or muting
+    try { sniffVideoSources(video); } catch (e) {}
 
     const header = document.createElement("div");
     header.className = "wrench-dropdown-header";
@@ -1710,6 +1608,9 @@
     const generation = (menu._populateGeneration || 0) + 1;
     menu._populateGeneration = generation;
     try {
+      // Pull embedded player data first (synchronous): ladder/manifests
+      // complete even when no player fetch crossed our hooks.
+      try { window.dispatchEvent(new CustomEvent("__WRENCH_HARVEST_PLAYER__")); } catch (e) {}
       // One pipeline for every page: no per-site branches.
       let items = [];
       let bgMedia = [];
@@ -1778,14 +1679,6 @@
               subEl.textContent = item.sub;
               return;
             }
-            if (item.isStartMse) {
-              startMseRecording(video);
-              return;
-            }
-            if (item.isStopMse) {
-              stopMseRecording("stop");
-              return;
-            }
             sendDownloadToApp(item);
             menu.remove();
             currentOpenMenu = null;
@@ -1805,10 +1698,59 @@
     }
   }
 
+  // Concrete stream URLs go through untouched. Extension-less counts too:
+  // YouTube rendition ids (?itag=N) are the exact authorized bytes, and
+  // extension-less HLS/DASH masters are complete manifests.
+  function isConcreteStreamUrl(u) {
+    if (!u || typeof u !== "string") return false;
+    if (/^(blob:|data:|chrome-extension:\/\/)/i.test(u)) return false;
+    if (/\.(mp4|webm|m3u8|mpd|m4s|mkv|mov)($|\?|#)/i.test(u)) return true;
+    if (/[?&]itag=\d+/i.test(u)) return true;
+    if (/hls_playlist|hls_variant|manifest\.googlevideo\.com|\/manifest\//i.test(u)) return true;
+    return false;
+  }
+
+  function isAudioCapture(s) {
+    if (!s) return false;
+    if (s.type === "audio") return true;
+    if ((s.quality || "").toLowerCase() === "audio") return true;
+    const m = String(s.url || "").match(/[?&]itag=(\d+)/i);
+    if (m) {
+      try { if (ITAG_AUDIO.has(parseInt(m[1], 10))) return true; } catch (e) {}
+    }
+    return false;
+  }
+
   function sendDownloadToApp(item) {
     if (!item.url || item.url.startsWith("blob:")) {
       alert("Stream URL not ready yet. Please play the video for 1 second first!");
       return;
+    }
+
+    // Repair page-fallback URLs only (url == pageUrl, bridge-local, or
+    // otherwise not a stream). Concrete streams keep their exact URL: the
+    // old extension-check rewrote extension-less itag URLs (e.g. YouTube
+    // 1080p videoplayback) to the newest capture of ANY type - often audio.
+    if (item.url === item.pageUrl || !isConcreteStreamUrl(item.url)) {
+      const wantAudio = (item.quality || "").toLowerCase() === "audio";
+      let replacement = "";
+      if (activeVideo && activeVideo.currentSrc && isConcreteStreamUrl(activeVideo.currentSrc)) {
+        replacement = activeVideo.currentSrc;
+      } else if (activeVideo && activeVideo._wrenchCapturedStreams && activeVideo._wrenchCapturedStreams.length > 0) {
+        // IDM-freshness: newest capture first; expired links and
+        // per-fragment junk (ranges, SABR handshakes) are never candidates.
+        // No blind pool[0] fallback: a wrong-type URL is worse than none.
+        const pool = activeVideo._wrenchCapturedStreams
+          .filter(s => s && s.url && !/^(blob:|data:|chrome-extension:\/\/)/i.test(s.url))
+          .filter(s => !isExpiredStreamUrl(s.url))
+          .filter(s => !/[?&](range|bytestart|byteend|sabr|aitags)=/i.test(s.url || ""))
+          .sort((a, b) => (b.time || 0) - (a.time || 0));
+        const match = pool.find(s => s.quality === item.quality && (wantAudio || !isAudioCapture(s))) ||
+                      (wantAudio ? pool.find(s => isAudioCapture(s)) : pool.find(s => !isAudioCapture(s)));
+        if (match && match.url) replacement = match.url;
+      }
+      // Never swap a good URL for a worse one: only concrete replacements.
+      if (replacement && isConcreteStreamUrl(replacement)) item.url = replacement;
     }
 
     const payload = {

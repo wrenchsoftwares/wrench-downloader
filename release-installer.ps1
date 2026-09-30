@@ -42,6 +42,11 @@ $stagedExtension = Join-Path $stageDirectory "chrome extension"
 New-Item -ItemType Directory -Path $stagedExtension -Force | Out-Null
 Copy-Item -Path (Join-Path $extensionSource "*") -Destination $stagedExtension -Recurse -Force
 
+# Source manifest carries a "debug" suffix for local dev; releases must ship the clean store name.
+$stagedManifest = Join-Path $stagedExtension "manifest.json"
+(Get-Content -LiteralPath $stagedManifest -Raw) -replace '"name":\s*"Wrench Downloader Companion debug"', '"name": "Wrench Downloader Companion"' |
+    Set-Content -LiteralPath $stagedManifest -NoNewline
+
 # Installed mode must NOT contain the portable marker or the portable launcher.
 $strayMarker = Join-Path $stageDirectory "portable.mode"
 if (Test-Path $strayMarker) { Remove-Item -LiteralPath $strayMarker -Force }

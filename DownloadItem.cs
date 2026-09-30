@@ -14,6 +14,17 @@ public enum DownloadStatus
     Failed
 }
 
+/// <summary>One SABR media segment: the exact ranged request the browser
+/// made (signed URL + byte range). Replayed in byte order, the segments
+/// concatenate into the rendition file. Pure-SABR gated videos have no
+/// other downloadable form.</summary>
+public sealed class StreamSegment
+{
+    public string Url { get; set; } = "";
+    /// <summary>HTTP Range value, e.g. "bytes=0-524287". Empty = whole URL.</summary>
+    public string Range { get; set; } = "";
+}
+
 /// <summary>One browser cookie as handed over by the companion extension.</summary>
 public sealed class BrowserCookie
 {
@@ -74,6 +85,30 @@ public class DownloadItem : INotifyPropertyChanged
     /// <summary>Browser-minted PO token harvested from the playing tab's
     /// stream requests (proves a genuine client to YouTube).</summary>
     public string PoToken { get; set; } = "";
+    /// <summary>Audio companion stream fully resolved by the extension
+    /// (DASH video-only renditions need this for muxing). When present the
+    /// app downloads both URLs directly with zero page re-resolve, which is
+    /// what age/login gates block.</summary>
+    public string AudioUrl { get; set; } = "";
+    public string AudioReferrer { get; set; } = "";
+    /// <summary>SABR session: the browser's live segment traffic for this
+    /// rendition (null/empty when the stream is a plain direct URL).</summary>
+    public bool IsSabr { get; set; }
+    public int Itag { get; set; }
+    /// <summary>Full rendition size when known (clen= param).</summary>
+    public long ExpectedBytes { get; set; }
+    /// <summary>DASH init byte-range (e.g. "0-739") fetched first so the
+    /// reassembled file is playable.</summary>
+    public string InitRange { get; set; } = "";
+    public string AudioInitRange { get; set; } = "";
+    public List<StreamSegment>? Segments { get; set; }
+    public List<StreamSegment>? AudioSegments { get; set; }
+    /// <summary>MSE recording session id. While set, the engine stays out:
+    /// bytes arrive via /api/segment and /api/finish assembles the file.</summary>
+    public string MseUploadId { get; set; } = "";
+    /// <summary>Safe browser request headers captured for this exact media
+    /// rendition. Used to reproduce the request Chrome already proved works.</summary>
+    public Dictionary<string, string> StreamHeaders { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public string TargetFolder { get; set; } = "";
     public string QueueName { get; set; } = "Main queue";
     public bool DownloadPlaylist { get; set; }

@@ -27,10 +27,8 @@ public sealed partial class MainWindow : Window
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _taskbarTimer;
     private IntPtr _taskbarHwnd = IntPtr.Zero;
     private string _baseTitle = "Wrench Downloader";
-#if !DEBUG
     private TrayIconHelper? _trayIcon;
     private bool _isExplicitExit;
-#endif
     private static readonly string HistoryFilePath = PortablePaths.HistoryFilePath;
 
     public MainWindow()
@@ -66,9 +64,8 @@ public sealed partial class MainWindow : Window
         // Flush history immediately on window closing/closed
         Closed += (s, e) =>
         {
-#if !DEBUG
+            try { System.IO.File.AppendAllText(PortablePaths.StartupLogPath, $"[{System.DateTime.Now}] MAINWINDOW CLOSED EVENT FIRED. isExplicit={_isExplicitExit}\n"); } catch { }
             _trayIcon?.Dispose();
-#endif
             if (_clipboardMonitoringAttached)
             Windows.ApplicationModel.DataTransfer.Clipboard.ContentChanged -= OnClipboardContentChanged;
             try { _taskbarTimer?.Stop(); } catch { }
@@ -76,13 +73,13 @@ public sealed partial class MainWindow : Window
             SaveHistoryToFile();
         };
 
-#if !DEBUG
-        // Initialize System Tray (Release mode only)
-        InitTrayIcon();
+        // Initialize System Tray
+        // InitTrayIcon();
 
         // Handle Close button / Alt+F4
         AppWindow.Closing += (sender, args) =>
         {
+            try { System.IO.File.AppendAllText(PortablePaths.StartupLogPath, $"[{System.DateTime.Now}] APPWINDOW CLOSING FIRED. isExplicit={_isExplicitExit}, CloseToTray={SettingsHelper.CloseToTray}\n"); } catch { }
             if (!_isExplicitExit && SettingsHelper.CloseToTray)
             {
                 args.Cancel = true;
@@ -93,7 +90,6 @@ public sealed partial class MainWindow : Window
                 _trayIcon?.Dispose();
             }
         };
-#endif
 
         // Start Extension Bridge Server
         _bridgeServer = new ExtensionBridgeServer(OnExtensionDownloadRequested);
@@ -151,7 +147,6 @@ public sealed partial class MainWindow : Window
         catch { }
     }
 
-#if !DEBUG
     private void InitTrayIcon()
     {
         try
@@ -197,7 +192,6 @@ public sealed partial class MainWindow : Window
         AppWindow.Destroy();
         Application.Current.Exit();
     }
-#endif
 
     private void LoadHistory()
     {
@@ -493,12 +487,14 @@ public sealed partial class MainWindow : Window
     private void OnExtensionDownloadRequested((DownloadItem item, bool showPrompt) request)
     {
         var (item, promptRequestedByCaller) = request;
-        bool shouldPrompt = promptRequestedByCaller || SettingsHelper.ShowDownloadDialog;
+        bool shouldPrompt = promptRequestedByCaller && SettingsHelper.ShowDownloadDialog;
 
         // Must dispatch to UI thread
-        DispatcherQueue.TryEnqueue(() =>
+        DispatcherQueue.TryEnqueue(async () =>
         {
             item.SetDispatcherQueue(DispatcherQueue);
+            if (await TryResumeExistingAsync(item, allowDialog: shouldPrompt))
+                return;
             if (shouldPrompt)
             {
                 ShowDownloadPrompt(item);
@@ -511,6 +507,95 @@ public sealed partial class MainWindow : Window
                 QueueDownload(item);
             }
         });
+    }
+
+    /// <summary>
+    /// Finds an unfinished list entry for the same URL + quality (paused,
+    /// failed, queued). Null when this is genuinely new (finished files are
+    /// handled by collision numbering at move time instead).
+    /// </summary>
+    private DownloadItem? FindResumableMatch(DownloadItem candidate)
+    {
+        try
+        {
+            if (candidate == null || string.IsNullOrWhiteSpace(candidate.Url)) return null;
+            return Downloads.FirstOrDefault(d =>
+                !string.Equals(d.Id, candidate.Id, StringComparison.Ordinal) &&
+                d.Status != DownloadStatus.Completed &&
+                string.Equals(d.Url, candidate.Url, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(d.Quality ?? "", candidate.Quality ?? "", StringComparison.OrdinalIgnoreCase) &&
+                DownloadEngine.IsUnfinishedTemp(d));
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// Re-download choice: resume the existing partial entry (refreshing its
+    /// URLs/session from the new capture) or keep both (the new copy gets a
+    /// numbered name at move time). Returns true when handled here.
+    /// </summary>
+    private async Task<bool> TryResumeExistingAsync(DownloadItem fresh, bool allowDialog = true)
+    {
+        DownloadItem? existing = FindResumableMatch(fresh);
+        if (existing == null) return false;
+
+        if (!allowDialog || Content?.XamlRoot == null)
+        {
+            ApplyResume(existing, fresh);
+            return true;
+        }
+
+        try
+        {
+            int percent = (int)Math.Floor(Math.Clamp(existing.Progress, 0, 100));
+            var dialog = new ContentDialog
+            {
+                Title = AppLocalization.Get("resume.title"),
+                Content = AppLocalization.Format("resume.message", existing.Title, percent),
+                PrimaryButtonText = AppLocalization.Get("resume.resume"),
+                SecondaryButtonText = AppLocalization.Get("resume.startNew"),
+                CloseButtonText = AppLocalization.Get("common.close"),
+                DefaultButton = ContentDialogButton.Primary,
+                XamlRoot = Content.XamlRoot
+            };
+            ContentDialogResult result = await dialog.ShowAsync();
+            if (result == ContentDialogResult.Primary)
+            {
+                ApplyResume(existing, fresh);
+                return true;
+            }
+            if (result == ContentDialogResult.Secondary)
+            {
+                return false; // caller proceeds: brand-new entry, numbered at move time
+            }
+            return true; // Cancel: swallow the duplicate silently
+        }
+        catch { return false; }
+    }
+
+    private void ApplyResume(DownloadItem existing, DownloadItem fresh)
+    {
+        // Fresh capture wins for session-bound links; byte offset stays.
+        existing.Url = fresh.Url;
+        existing.AudioUrl = fresh.AudioUrl;
+        existing.AudioReferrer = fresh.AudioReferrer;
+        existing.Segments = fresh.Segments;
+        existing.AudioSegments = fresh.AudioSegments;
+        existing.ExpectedBytes = fresh.ExpectedBytes;
+        existing.InitRange = fresh.InitRange;
+        existing.AudioInitRange = fresh.AudioInitRange;
+        existing.Cookies = fresh.Cookies;
+        existing.PoToken = fresh.PoToken;
+        existing.Referrer = string.IsNullOrWhiteSpace(fresh.Referrer) ? existing.Referrer : fresh.Referrer;
+        existing.UserAgent = string.IsNullOrWhiteSpace(fresh.UserAgent) ? existing.UserAgent : fresh.UserAgent;
+        existing.PageUrl = string.IsNullOrWhiteSpace(fresh.PageUrl) ? existing.PageUrl : fresh.PageUrl;
+        if (existing.IsActive) existing.Cancel();
+        existing.ResetCancellationToken();
+        existing.Status = DownloadStatus.Queued;
+        existing.StatusText = AppLocalization.Get("download.queued");
+        if (!Downloads.Contains(existing)) Downloads.Insert(0, existing);
+        QueueDownload(existing);
+        StatusTextBlock.Text = AppLocalization.Format("main.started", existing.Title);
     }
 
     private void OnQueueToggleClick(object sender, RoutedEventArgs e)
@@ -562,7 +647,7 @@ public sealed partial class MainWindow : Window
         QueueToggleButton.Content = AppLocalization.Get(_downloadQueuePaused || hasSavedItems ? "queue.start" : "queue.pause");
     }
 
-    private void OnAddDownloadClick(object sender, RoutedEventArgs e)
+    private async void OnAddDownloadClick(object sender, RoutedEventArgs e)
     {
         string url = UrlTextBox.Text.Trim();
         if (string.IsNullOrWhiteSpace(url))
@@ -604,6 +689,9 @@ public sealed partial class MainWindow : Window
         };
 
         UrlTextBox.Text = string.Empty;
+        // Same file re-added while unfinished: offer resume instead of a duplicate.
+        if (await TryResumeExistingAsync(item))
+            return;
         if (DownloadPromptWindow.HasYouTubePlaylist(url))
         {
             ShowDownloadPrompt(item);
@@ -774,6 +862,7 @@ public sealed partial class MainWindow : Window
     {
         try
         {
+            if (Content?.XamlRoot == null) return true;
             var dialog = new ContentDialog
             {
                 Title = AppLocalization.Get("dialog.confirmTitle"),
@@ -796,6 +885,7 @@ public sealed partial class MainWindow : Window
     {
         try
         {
+            if (Content?.XamlRoot == null) return;
             string fileName = !string.IsNullOrEmpty(item.SavePath)
                 ? Path.GetFileName(item.SavePath)
                 : item.Title;

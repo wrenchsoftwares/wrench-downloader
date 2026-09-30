@@ -34,6 +34,76 @@ function freshPot(tabId) {
   return "";
 }
 
+// SABR segment sets: tabId -> itag -> [{ u, range, len, time }].
+// u = exact segment URL the browser fetched (signed, session-authorized).
+// range = "bytes=a-b" (Range request header or range= query) or "".
+// len = response Content-Length (segment bytes; full length when un-ranged).
+// The app replays these in byte order and concatenates = the rendition file.
+const sabrByTab = new Map();
+const SABR_MAX_SEGMENTS = 1500;
+
+function recordSabrSegment(tabId, url, details) {
+  try {
+    if (tabId < 0 || !url) return;
+    const itagMatch = String(url).match(/[?&]itag=(\d+)/i);
+    if (!itagMatch) return;
+    const itag = parseInt(itagMatch[1], 10);
+    let range = "";
+    const rq = String(url).match(/[?&]range=([\d]+-[\d]*)/i);
+    if (rq) range = "bytes=" + rq[1];
+    if (!range) {
+      try {
+        const rec = requestHeadersMap.get(url);
+        if (rec && rec.range) range = rec.range;
+      } catch (e) {}
+    }
+    let len = 0;
+    try {
+      if (details && details.responseHeaders) {
+        for (const h of details.responseHeaders) {
+          if (h.name && h.name.toLowerCase() === "content-length") {
+            len = parseInt(h.value || "0", 10) || 0;
+            break;
+          }
+        }
+      }
+    } catch (e) {}
+    // Skip non-media responses (empty pings).
+    if (!len && !range) {
+      // Still record range-less full-file responses; length unknown.
+      if (!/\/videoplayback/i.test(url)) return;
+    }
+    let perTab = sabrByTab.get(tabId);
+    if (!perTab) { perTab = new Map(); sabrByTab.set(tabId, perTab); }
+    let list = perTab.get(itag);
+    if (!list) { list = []; perTab.set(itag, list); }
+    const key = url + "|" + range;
+    for (const s of list) { if (s.key === key) return; } // seen
+    list.push({ u: url, range: range, len: len, time: Date.now(), key: key });
+    if (list.length > SABR_MAX_SEGMENTS) list.splice(0, list.length - SABR_MAX_SEGMENTS);
+    if (sabrByTab.size > 20) {
+      const firstKey = sabrByTab.keys().next().value;
+      sabrByTab.delete(firstKey);
+    }
+  } catch (e) {}
+}
+
+function getSabrSets(tabId) {
+  const out = [];
+  try {
+    const perTab = sabrByTab.get(tabId);
+    if (!perTab) return out;
+    for (const [itag, list] of perTab) {
+      if (!list || list.length === 0) continue;
+      out.push({
+        itag: itag,
+        segments: list.slice(-500).map(s => ({ u: s.u, range: s.range, len: s.len }))
+      });
+    }
+  } catch (e) {}
+  return out;
+}
+
 // Debug tracking: last sends to the desktop app (what site, what quality,
 // how many session cookies, when). Pulled via GET_RECENT_SENDS when the user
 // reports a broken download; matched against the app's startup.log by time.
@@ -81,17 +151,29 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
     if (!details.url || details.tabId < 0) return;
     let referer = "";
     let userAgent = "";
+    const streamHeaders = {};
+    const forwardedHeaderNames = new Set([
+      "accept", "accept-language", "cookie", "origin", "referer", "user-agent",
+      "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform",
+      "sec-fetch-dest", "sec-fetch-mode", "sec-fetch-site", "sec-fetch-user"
+    ]);
 
+    let rangeHeader = "";
     if (details.requestHeaders) {
       for (const h of details.requestHeaders) {
         const name = h.name.toLowerCase();
         if (name === "referer") referer = h.value || "";
         if (name === "user-agent") userAgent = h.value || "";
+        if (name === "range") rangeHeader = h.value || "";
+        // Reproduce the browser's media request in the desktop downloader.
+        // Range/Host/transport headers are intentionally omitted: the app
+        // requests the complete signed rendition URL itself.
+        if (forwardedHeaderNames.has(name) && h.value) streamHeaders[h.name] = h.value;
       }
     }
 
-    if (referer || userAgent) {
-      requestHeadersMap.set(details.url, { referer, userAgent, time: Date.now() });
+    if (referer || userAgent || rangeHeader || Object.keys(streamHeaders).length > 0) {
+      requestHeadersMap.set(details.url, { referer, userAgent, streamHeaders, range: rangeHeader, time: Date.now() });
       // Keep map small
       if (requestHeadersMap.size > 200) {
         const firstKey = requestHeadersMap.keys().next().value;
@@ -119,7 +201,18 @@ chrome.webRequest.onHeadersReceived.addListener(
     // are the exact bytes the browser is already playing (authorized session
     // included), which is precisely what the desktop app cannot re-resolve on
     // gated pages. Chunk continuations (range/bytestart) are still skipped.
+    // SABR redirectors (?aitags= list) are also skipped: only playable
+    // through the page's live handshake, never directly downloadable - the
+    // HLS master (hls_playlist, embeds all renditions + audio) is the prize.
+    // BUT their per-segment traffic IS the content: record every SABR
+    // segment (itag + byte range) per tab so the app can replay the exact
+    // bytes the browser fetched and reassemble the file. Pure-SABR gated
+    // videos have no other downloadable form.
     // (.ts = HLS fragments: a 10s chunk that plays only a fragment, never the video.)
+    if (/\/videoplayback/i.test(url) && /[?&]itag=\d+/i.test(url)) {
+      recordSabrSegment(details.tabId, url, details);
+    }
+    if (/[?&]aitags=/i.test(url)) return;
     if (
       url.includes("/segment") ||
       url.includes("/frag") ||
@@ -189,6 +282,7 @@ chrome.webRequest.onHeadersReceived.addListener(
         contentType: contentType,
         referer: headers.referer || details.initiator || "",
         userAgent: headers.userAgent || "",
+        streamHeaders: headers.streamHeaders || {},
         time: Date.now()
       });
     }
@@ -205,12 +299,30 @@ chrome.webRequest.onBeforeRequest.addListener(
 
     harvestPot(details.tabId, url);
 
+    // Extension-resolved architecture: range-less videoplayback URLs with a
+    // rendition id are the authorized stream itself - capture them here too
+    // (onHeadersReceived is primary, this is the fallback).
+    const isResolvablePlayback = /\/videoplayback/i.test(url) &&
+      /[?&]itag=\d+/i.test(url) &&
+      !/[?&](range|bytestart|byteend|aitags|sabr)=/i.test(url);
     if (
-      url.includes("/videoplayback") ||
+      (url.includes("/videoplayback") && !isResolvablePlayback) ||
       url.includes("/segment") ||
       url.includes("/frag") ||
       url.includes("range=")
     ) {
+      return;
+    }
+
+    if (isResolvablePlayback) {
+      addDetectedMedia(details.tabId, {
+        url: url,
+        title: guessTitle(url),
+        type: "video",
+        quality: (() => { const m = url.match(/[?&]itag=(\d+)/i); const h = m ? (ITAG_HEIGHTS[parseInt(m[1], 10)] || 0) : 0; return h > 0 ? `${h}p` : ""; })(),
+        size: "",
+        time: Date.now()
+      });
       return;
     }
 
@@ -307,8 +419,29 @@ function formatBytes(bytes) {  if (!bytes || bytes <= 0) return "";
   return `${val.toFixed(1)} ${units[i]}`;
 }
 
+// Signed stream URLs carry their own death date (?expire=unix). A dead
+// edge hostname (NXDOMAIN) or 410 is guaranteed past expiry - never store
+// or offer those; the tab must replay to mint fresh links (IDM behaves the
+// same: it only ever offers live-sniffed streams).
+function isExpiredUrl(u) {
+  try {
+    const s = String(u || "");
+    let m = s.match(/[?&]expire=(\d+)/i);
+    if (!m) {
+      // Some CDNs sign with e=<epoch> instead (e.g. phncdn masters).
+      const e2 = s.match(/[?&]e=(\d{10})/);
+      if (!e2) return false;
+      const v = parseInt(e2[1], 10);
+      if (v < 1000000000 || v > 4000000000) return false;
+      m = e2;
+    }
+    return parseInt(m[1], 10) < (Date.now() / 1000 - 60);
+  } catch (e) { return false; }
+}
+
 function addDetectedMedia(tabId, item) {
   if (!item || !item.url) return;
+  if (isExpiredUrl(item.url)) return;
   if (!mediaByTab.has(tabId)) {
     mediaByTab.set(tabId, []);
   }
@@ -327,6 +460,10 @@ function addDetectedMedia(tabId, item) {
     if (item.contentLengthBytes && !existing.contentLengthBytes) existing.contentLengthBytes = item.contentLengthBytes;
     if (item.referer && !existing.referer) existing.referer = item.referer;
     if (item.userAgent && !existing.userAgent) existing.userAgent = item.userAgent;
+    if (item.streamHeaders && Object.keys(item.streamHeaders).length > 0) {
+      existing.streamHeaders = { ...(existing.streamHeaders || {}), ...item.streamHeaders };
+      chrome.tabs.sendMessage(tabId, { action: "MEDIA_DETECTED", media: existing }).catch(() => {});
+    }
   }
 }
 
@@ -334,6 +471,16 @@ function addDetectedMedia(tabId, item) {
 chrome.tabs.onRemoved.addListener((tabId) => {
   mediaByTab.delete(tabId);
   potByTab.delete(tabId);
+  sabrByTab.delete(tabId);
+});
+
+// A top-level navigation starts a new page context. Drop the old page's
+// streams and attestation so a new video cannot inherit expired links.
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status === "loading") {
+    mediaByTab.delete(tabId);
+    potByTab.delete(tabId);
+  }
 });
 
 // Intercept general browser downloads (MediaFire, direct downloads, zip, exe, rar, pdf, iso, etc.)
@@ -383,6 +530,7 @@ async function handleInterceptedDownload(downloadItem) {
       pageUrl: downloadItem.referrer || "",
       referrer: headers.referer || downloadItem.referrer || "",
       userAgent: headers.userAgent || navigator.userAgent,
+      streamHeaders: headers.streamHeaders || {},
       prompt: true
     };
 
@@ -443,7 +591,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Only this tab's streams: leaking another tab's media here produced
     // dropdown rows whose URLs don't match the current video (rows that fail).
     const items = (tabId && mediaByTab.get(tabId)) || [];
-    sendResponse({ media: items });
+    sendResponse({ media: items, sabr: getSabrSets(tabId || -1) });
+    return true;
+  }
+
+  if (message.action === "CLEAR_MEDIA") {
+    if (tabId !== undefined && tabId !== null && tabId >= 0) mediaByTab.delete(tabId);
+    sendResponse({ status: "ok" });
     return true;
   }
 
@@ -459,6 +613,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "SEND_TO_APP") {
     const sendTabId = sender.tab ? sender.tab.id : message.tabId;
     try {
+      if (sendTabId !== undefined && sendTabId !== null && sendTabId >= 0 && message.payload) {
+        const captured = (mediaByTab.get(sendTabId) || []).find(m => m.url === message.payload.url);
+        const headers = captured && captured.streamHeaders;
+        if (headers && Object.keys(headers).length > 0) message.payload.streamHeaders = headers;
+      }
       if (sendTabId !== undefined && sendTabId !== null && sendTabId >= 0 &&
           message.payload && !message.payload.poToken) {
         const pot = freshPot(sendTabId);
@@ -471,7 +630,86 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch((err) => sendResponse({ success: false, error: err.message }));
     return true;
   }
+
+  if (message.action === "MSE_BEGIN") {
+    const sendTabId = sender.tab ? sender.tab.id : message.tabId;
+    const payload = {
+      title: message.title || "Recording",
+      quality: "record",
+      format: "mp4",
+      pageUrl: message.pageUrl || "",
+      referrer: message.referrer || "",
+      userAgent: message.userAgent || navigator.userAgent,
+      mse: true,
+      uploadId: message.uploadId || "",
+      prompt: false
+    };
+    try {
+      if (sendTabId !== undefined && sendTabId !== null && sendTabId >= 0 && !payload.poToken) {
+        const pot = freshPot(sendTabId);
+        if (pot) payload.poToken = pot;
+      }
+    } catch (e) {}
+    sendToDesktopApp(payload, sendTabId)
+      .then((res) => sendResponse({ success: true, result: res }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.action === "MSE_CHUNK") {
+    // Ordered per track: localhost POSTs for one track chain sequentially so
+    // the app appends bytes in playback order even under concurrency.
+    const key = (message.uploadId || "") + "|" + (message.track || "video");
+    const prev = msePostChains.get(key) || Promise.resolve();
+    const next = prev.then(() => postMseChunk(message)).catch(() => {});
+    msePostChains.set(key, next);
+    if (msePostChains.size > 20) {
+      const firstKey = msePostChains.keys().next().value;
+      msePostChains.delete(firstKey);
+    }
+    sendResponse({ status: "queued" });
+    return true;
+  }
+
+  if (message.action === "MSE_END") {
+    postMseFinish(message)
+      .then((res) => sendResponse({ success: true, result: res }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
 });
+
+// In-flight POST chains per upload+track (see MSE_CHUNK above).
+const msePostChains = new Map();
+
+async function postMseChunk(message) {
+  const params = new URLSearchParams({
+    uploadId: message.uploadId || "",
+    track: message.track === "audio" ? "audio" : "video",
+    seq: String(message.seq || 0)
+  });
+  const response = await fetch(`${APP_SERVER_URL.replace("/api/download", "/api/segment")}?${params}`, {
+    method: "POST",
+    body: message.data
+  });
+  if (!response.ok) {
+    throw new Error(`segment rejected: ${response.status}`);
+  }
+}
+
+async function postMseFinish(message) {
+  const params = new URLSearchParams({
+    uploadId: message.uploadId || "",
+    reason: message.reason || "stop"
+  });
+  const response = await fetch(`${APP_SERVER_URL.replace("/api/download", "/api/finish")}?${params}`, {
+    method: "POST"
+  });
+  if (!response.ok) {
+    throw new Error(`finish rejected: ${response.status}`);
+  }
+  return await response.json();
+}
 
 async function sendToDesktopApp(payload, tabId) {
   // Hand the app the live browser session: cookie-DB export (yt-dlp
@@ -481,12 +719,21 @@ async function sendToDesktopApp(payload, tabId) {
   // browser-attached downloaders. Best-effort: older installs without the
   // "cookies" permission simply send none.
   try {
-    const cookieUrl = payload.pageUrl || payload.referrer || payload.url || "";
-    if (cookieUrl && /^https?:\/\//i.test(cookieUrl) &&
-        chrome.cookies && chrome.cookies.getAll) {
-      const raw = await chrome.cookies.getAll({ url: cookieUrl });
-      if (raw && raw.length > 0) {
-        payload.cookies = raw.slice(0, 100).map(c => ({
+    const cookieUrls = [...new Set([payload.url, payload.pageUrl || payload.referrer].filter(u =>
+      typeof u === "string" && /^https?:\/\//i.test(u)))];
+    if (cookieUrls.length && chrome.cookies && chrome.cookies.getAll) {
+      const allCookies = [];
+      for (const cookieUrl of cookieUrls) {
+        const raw = await chrome.cookies.getAll({ url: cookieUrl });
+        if (raw) allCookies.push(...raw);
+      }
+      const uniqueCookies = new Map();
+      for (const c of allCookies) {
+        const key = `${c.domain || ""}|${c.path || "/"}|${c.name || ""}`;
+        uniqueCookies.set(key, c);
+      }
+      if (uniqueCookies.size > 0) {
+        payload.cookies = Array.from(uniqueCookies.values()).slice(0, 100).map(c => ({
           name: c.name || "",
           value: c.value || "",
           domain: (c.domain || "").replace(/^\./, ""),

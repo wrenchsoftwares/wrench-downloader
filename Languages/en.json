@@ -159,5 +159,9 @@
   "ext.copiedAddress": "Address copied — paste it into Chrome's address bar.",
   "ext.comingSoon": "Coming soon",
   "main.extensionStaged": "Extension files ready at {0}.",
-  "main.extensionStageFailed": "Extension setup failed: {0}"
+  "main.extensionStageFailed": "Extension setup failed: {0}",
+  "resume.title": "Resume download?",
+  "resume.message": "\"{0}\" is {1}% downloaded. Resume from where it stopped, or start a new download (saved as a numbered copy)?",
+  "resume.resume": "Resume",
+  "resume.startNew": "Start new"
 }

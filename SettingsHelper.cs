@@ -92,8 +92,17 @@ public static class SettingsHelper
                     : default;
             }
 
-            var value = ApplicationData.Current.LocalSettings.Values[key];
-            return value is T typed ? typed : default;
+            try
+            {
+                var value = ApplicationData.Current.LocalSettings.Values[key];
+                return value is T typed ? typed : default;
+            }
+            catch
+            {
+                return LoadPortableSettings().TryGetValue(key, out var stored)
+                    ? stored.Deserialize<T>()
+                    : default;
+            }
         }
         catch
         {
@@ -287,7 +296,16 @@ public static class SettingsHelper
             }
             else
             {
-                ApplicationData.Current.LocalSettings.Values[key] = value;
+                try
+                {
+                    ApplicationData.Current.LocalSettings.Values[key] = value;
+                }
+                catch
+                {
+                    var values = LoadPortableSettings();
+                    values[key] = JsonSerializer.SerializeToElement(value);
+                    File.WriteAllText(PortablePaths.SettingsFilePath, JsonSerializer.Serialize(values, new JsonSerializerOptions { WriteIndented = true }));
+                }
             }
         }
         catch { }
@@ -337,9 +355,6 @@ public static class SettingsHelper
     {
         get
         {
-#if DEBUG
-            return false;
-#else
             if (_cachedCloseToTray.HasValue) return _cachedCloseToTray.Value;
             try
             {
@@ -353,7 +368,6 @@ public static class SettingsHelper
             catch { }
             _cachedCloseToTray = true; // Default to minimize to tray on close
             return true;
-#endif
         }
     }
 
@@ -457,23 +471,47 @@ public static class SettingsHelper
             }
             else
             {
-                var values = ApplicationData.Current.LocalSettings.Values;
-                if (!string.IsNullOrWhiteSpace(folder) && Directory.Exists(folder))
-                    values[FolderKey] = folder;
-                values[FragmentsKey] = _cachedFragments.Value;
-                if (!string.IsNullOrWhiteSpace(quality))
-                    values[QualityKey] = quality;
-                values[ShowDialogKey] = showDialog;
-                values[CloseToTrayKey] = closeToTray;
-                values[MaximumConcurrentDownloadsKey] = _cachedMaximumConcurrentDownloads.Value;
-                values[MaximumDownloadRateKey] = _cachedMaximumDownloadRateKBps.Value;
-                values[ClipboardMonitorKey] = _cachedClipboardMonitorEnabled.Value;
-                values[OrganizeDownloadsKey] = _cachedOrganizeDownloadsByType.Value;
-                values[ShowCompleteDialogKey] = _cachedShowCompleteDialog.Value;
-                values[PlaySoundOnCompleteKey] = _cachedPlaySoundOnComplete.Value;
-                values[ConfirmOnDeleteFileKey] = _cachedConfirmOnDeleteFile.Value;
-                values[AutoResumeInterruptedKey] = _cachedAutoResumeInterrupted.Value;
-                values[AutoRetryCountKey] = _cachedAutoRetryCount.Value;
+                try
+                {
+                    var values = ApplicationData.Current.LocalSettings.Values;
+                    if (!string.IsNullOrWhiteSpace(folder) && Directory.Exists(folder))
+                        values[FolderKey] = folder;
+                    values[FragmentsKey] = _cachedFragments.Value;
+                    if (!string.IsNullOrWhiteSpace(quality))
+                        values[QualityKey] = quality;
+                    values[ShowDialogKey] = showDialog;
+                    values[CloseToTrayKey] = closeToTray;
+                    values[MaximumConcurrentDownloadsKey] = _cachedMaximumConcurrentDownloads.Value;
+                    values[MaximumDownloadRateKey] = _cachedMaximumDownloadRateKBps.Value;
+                    values[ClipboardMonitorKey] = _cachedClipboardMonitorEnabled.Value;
+                    values[OrganizeDownloadsKey] = _cachedOrganizeDownloadsByType.Value;
+                    values[ShowCompleteDialogKey] = _cachedShowCompleteDialog.Value;
+                    values[PlaySoundOnCompleteKey] = _cachedPlaySoundOnComplete.Value;
+                    values[ConfirmOnDeleteFileKey] = _cachedConfirmOnDeleteFile.Value;
+                    values[AutoResumeInterruptedKey] = _cachedAutoResumeInterrupted.Value;
+                    values[AutoRetryCountKey] = _cachedAutoRetryCount.Value;
+                }
+                catch
+                {
+                    var values = LoadPortableSettings();
+                    if (!string.IsNullOrWhiteSpace(folder) && Directory.Exists(folder))
+                        values[FolderKey] = JsonSerializer.SerializeToElement(folder);
+                    values[FragmentsKey] = JsonSerializer.SerializeToElement(_cachedFragments.Value);
+                    if (!string.IsNullOrWhiteSpace(quality))
+                        values[QualityKey] = JsonSerializer.SerializeToElement(quality);
+                    values[ShowDialogKey] = JsonSerializer.SerializeToElement(showDialog);
+                    values[CloseToTrayKey] = JsonSerializer.SerializeToElement(closeToTray);
+                    values[MaximumConcurrentDownloadsKey] = JsonSerializer.SerializeToElement(_cachedMaximumConcurrentDownloads.Value);
+                    values[MaximumDownloadRateKey] = JsonSerializer.SerializeToElement(_cachedMaximumDownloadRateKBps.Value);
+                    values[ClipboardMonitorKey] = JsonSerializer.SerializeToElement(_cachedClipboardMonitorEnabled.Value);
+                    values[OrganizeDownloadsKey] = JsonSerializer.SerializeToElement(_cachedOrganizeDownloadsByType.Value);
+                    values[ShowCompleteDialogKey] = JsonSerializer.SerializeToElement(_cachedShowCompleteDialog.Value);
+                    values[PlaySoundOnCompleteKey] = JsonSerializer.SerializeToElement(_cachedPlaySoundOnComplete.Value);
+                    values[ConfirmOnDeleteFileKey] = JsonSerializer.SerializeToElement(_cachedConfirmOnDeleteFile.Value);
+                    values[AutoResumeInterruptedKey] = JsonSerializer.SerializeToElement(_cachedAutoResumeInterrupted.Value);
+                    values[AutoRetryCountKey] = JsonSerializer.SerializeToElement(_cachedAutoRetryCount.Value);
+                    File.WriteAllText(PortablePaths.SettingsFilePath, JsonSerializer.Serialize(values, new JsonSerializerOptions { WriteIndented = true }));
+                }
             }
         }
         catch { }

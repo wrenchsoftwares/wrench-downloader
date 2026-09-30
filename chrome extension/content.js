@@ -61,6 +61,210 @@
     }
   });
 
+  // Full ladder from the player's own API response (every advertised
+  // quality + fresh manifests), even when the browser only fetched 360p.
+  const pagePlayerLadder = new Set(); // heights, e.g. 1080
+  const pagePlayerManifests = []; // [{ url, kind }]
+  let pagePlayerAudioUrl = "";
+  // Init byte-ranges per itag (DASH/fMP4 needs the init segment first for a
+  // playable file; the app fetches it explicitly via Range).
+  const pagePlayerInitRanges = new Map(); // itag -> { init, index }
+  let currentPlayerVideoId = "";
+
+  // MSE recording state (one per page): transport-agnostic capture.
+  // The user clicks Record, plays the video through, clicks Stop (or the
+  // video ends) - every appended media byte streams to the app, which
+  // reassembles + muxes. Works for SABR, UMS, anything MSE-based.
+  let pageMse = null; // { uploadId, title, pageUrl, video }
+  let mseTxCounter = 0;
+  const MSE_MAX_PENDING = 400;
+
+  function mseControl(cmd, uploadId) {
+    try {
+      window.dispatchEvent(new CustomEvent("__WRENCH_MSE_CONTROL__", {
+        detail: { cmd: cmd, uploadId: uploadId || "" }
+      }));
+    } catch (e) {}
+  }
+
+  window.addEventListener("__WRENCH_MSE_CHUNK__", (e) => {
+    try {
+      const d = (e && e.detail) || {};
+      if (!pageMse || !d.uploadId || d.uploadId !== pageMse.uploadId) return;
+      if (!d.data || d.data.byteLength === 0) return;
+      mseTxCounter++;
+      if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
+        chrome.runtime.sendMessage({
+          action: "MSE_CHUNK",
+          uploadId: d.uploadId,
+          track: d.track === "audio" ? "audio" : "video",
+          seq: d.seq || 0,
+          data: d.data
+        }).catch(() => {});
+      }
+      if (currentOpenMenu && currentOpenMenu._video) {
+        // Throttled: refresh occasionally so the row shows recording state.
+        if (mseTxCounter % 40 === 0) scheduleDropdownRefresh();
+      }
+    } catch (err) {}
+  });
+
+  function startMseRecording(video) {
+    try {
+      if (pageMse) stopMseRecording("restart");
+      const context = getVideoContext(video);
+      const uploadId = "mse-" + Date.now().toString(36) + "-" +
+        Math.random().toString(36).slice(2, 8);
+      pageMse = {
+        uploadId: uploadId,
+        title: (context && context.title) || getCleanVideoTitle(video),
+        pageUrl: (context && context.pageUrl) || window.location.href,
+        video: video || null,
+        startedAt: Date.now(),
+        chunks: 0
+      };
+      mseTxCounter = 0;
+      if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
+        chrome.runtime.sendMessage({
+          action: "MSE_BEGIN",
+          uploadId: uploadId,
+          title: pageMse.title,
+          pageUrl: pageMse.pageUrl,
+          referrer: pageMse.pageUrl,
+          userAgent: navigator.userAgent,
+          prompt: false
+        }).catch(() => {});
+      }
+      mseControl("start", uploadId);
+      if (currentOpenMenu) { currentOpenMenu.remove(); currentOpenMenu = null; }
+    } catch (e) {}
+  }
+
+  function stopMseRecording(reason) {
+    try {
+      if (!pageMse) return;
+      const uploadId = pageMse.uploadId;
+      mseControl("stop", uploadId);
+      pageMse = null;
+      if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
+        chrome.runtime.sendMessage({
+          action: "MSE_END",
+          uploadId: uploadId,
+          reason: reason || "stop"
+        }).catch(() => {});
+      }
+      if (currentOpenMenu) { currentOpenMenu.remove(); currentOpenMenu = null; }
+    } catch (e) {}
+  }
+
+  // Signed URLs die at ?expire (unix seconds). Expired entries are worse
+  // than missing: they download DNS errors instead of video.
+  function isExpiredStreamUrl(u) {
+    try {
+      const s = String(u || "");
+      let m = s.match(/[?&]expire=(\d+)/i);
+      if (!m) {
+        const e2 = s.match(/[?&]e=(\d{10})/);
+        if (!e2) return false;
+        const v = parseInt(e2[1], 10);
+        if (v < 1000000000 || v > 4000000000) return false;
+        m = e2;
+      }
+      return parseInt(m[1], 10) < (Date.now() / 1000 - 60);
+    } catch (e) { return false; }
+  }
+
+  // Freshness score: live network captures outrank page-embedded data of
+  // the same height (embedded player configs go stale within hours).
+  function liveScore(m) {
+    try {
+      let s = 0;
+      if (!m.embeddedWeight) s += 2;
+      if (m.contentLengthBytes) s += 1;
+      if (m.time && (Date.now() - m.time < 10 * 60 * 1000)) s += 1;
+      return s;
+    } catch (e) { return 0; }
+  }
+
+  function reportPlayerMedia(item) {
+    if (!item || !item.url || isExpiredStreamUrl(item.url)) return;
+    if (!pageCapturedStreams.some((s) => s.url === item.url)) {
+      pageCapturedStreams.unshift(item);
+    }
+    const targetVideo = activeVideo || pickMainVideo();
+    if (targetVideo) {
+      if (!targetVideo._wrenchCapturedStreams) targetVideo._wrenchCapturedStreams = [];
+      if (!targetVideo._wrenchCapturedStreams.some(s => s.url === item.url)) {
+        targetVideo._wrenchCapturedStreams.unshift(item);
+      }
+    }
+    if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
+      chrome.runtime.sendMessage({ action: "REPORT_MEDIA", media: item }).catch(() => {});
+    }
+  }
+
+  window.addEventListener("__WRENCH_PLAYER_RESPONSE__", (e) => {
+    try {
+      const d = (e && e.detail) || {};
+      const pageUrl = window.location.href;
+      const title = getCleanVideoTitle();
+      if (d.videoId && d.videoId !== currentPlayerVideoId) {
+        currentPlayerVideoId = d.videoId;
+        pagePlayerLadder.clear();
+        pagePlayerManifests.splice(0);
+        pagePlayerItagHeights.clear();
+        pagePlayerAudioUrl = "";
+        pageCapturedStreams.splice(0);
+        if (activeVideo) activeVideo._wrenchCapturedStreams = [];
+        chrome.runtime.sendMessage({ action: "CLEAR_MEDIA" }).catch(() => {});
+      }
+      // Fresh manifests first: one authorized URL carries ALL renditions.
+      ["hls", "dash"].forEach(kind => {
+        const u = d.manifest && d.manifest[kind];
+        if (typeof u === "string" && /^https?:\/\//i.test(u) &&
+            !isExpiredStreamUrl(u) &&
+            !pagePlayerManifests.some(m => m.url === u)) {
+          pagePlayerManifests.unshift({ url: u, kind });
+          reportPlayerMedia({
+            url: u, title, type: kind, referer: pageUrl,
+            userAgent: navigator.userAgent, embeddedWeight: 9, time: Date.now()
+          });
+        }
+      });
+      (d.formats || []).forEach(f => {
+        // Ladder labels from the player itself - never invented.
+        const qm = String(f.qualityLabel || "").match(/(\d{3,4})p/i);
+        if (qm) pagePlayerLadder.add(parseInt(qm[1], 10));
+        const h = parseInt(qm ? qm[1] : "0", 10) || 0;
+        if (f.itag && h > 0) pagePlayerItagHeights.set(f.itag, h);
+        if (f.itag && (f.initRange || f.indexRange) && !pagePlayerInitRanges.has(f.itag)) {
+          pagePlayerInitRanges.set(f.itag, { init: f.initRange || "", index: f.indexRange || "" });
+        }
+        const audioFormat = String(f.mimeType || "").toLowerCase().startsWith("audio/") || f.audioTrack || ITAG_AUDIO.has(f.itag);
+        if (audioFormat && f.url && !isExpiredStreamUrl(f.url)) {
+          pagePlayerAudioUrl = f.url;
+        }
+        // Directly playable (non-ciphered) rendition URLs are fresh,
+        // page-issued streams - register them like embedded media.
+        // SABR redirectors (?aitags=) excluded: handshake-only URLs.
+        if (!audioFormat && f.url && !f.ciphered && /^https?:\/\//i.test(f.url) && h > 0 &&
+            !isExpiredStreamUrl(f.url) && !/[?&]aitags=/i.test(f.url)) {
+          reportPlayerMedia({
+            url: f.url, title, type: "video", referer: pageUrl,
+            userAgent: navigator.userAgent, embeddedWeight: 7,
+            itagHeight: h, quality: `${h}p`, time: Date.now()
+          });
+        } else if (audioFormat && f.url && /^https?:\/\//i.test(f.url) && !isExpiredStreamUrl(f.url)) {
+          reportPlayerMedia({
+            url: f.url, title, type: "audio", referer: pageUrl,
+            userAgent: navigator.userAgent, embeddedWeight: 7, time: Date.now()
+          });
+        }
+      });
+      if (currentOpenMenu && currentOpenMenu._video) scheduleDropdownRefresh();
+    } catch (err) {}
+  });
+
   // Listen for media detected from background service worker,
   // and serve real format lists to the popup (no fake qualities).
   function pickMainVideo() {
@@ -76,15 +280,22 @@
     } catch (e) { return null; }
   }
 
-  async function collectItemsForPopup() {
-    const video = pickMainVideo();
-    if (!video) return [];
-    let bgMedia = [];
+  // Background state for this tab: captured media + SABR segment sets.
+  async function getBackgroundState() {
+    let bgMedia = [], sabrSets = [];
     try {
       const response = await chrome.runtime.sendMessage({ action: "GET_MEDIA" }).catch(() => null);
       if (response && response.media) bgMedia = response.media;
+      if (response && response.sabr) sabrSets = response.sabr;
     } catch (e) {}
-    return getGenericVideoItems(video, bgMedia);
+    return { bgMedia, sabrSets };
+  }
+
+  async function collectItemsForPopup() {
+    const video = pickMainVideo();
+    if (!video) return [];
+    const { bgMedia, sabrSets } = await getBackgroundState();
+    return getGenericVideoItems(video, bgMedia, sabrSets);
   }
 
   if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage) {
@@ -166,11 +377,29 @@
     return svg;
   }
 
+  // Deep video scan: plain DOM plus shadow roots (custom players hide
+  // their <video> inside shadow DOM where querySelectorAll can't see it).
+  function findVideosDeep() {
+    const out = [];
+    try {
+      document.querySelectorAll("video").forEach(v => out.push(v));
+      document.querySelectorAll("*").forEach(el => {
+        try {
+          if (el.shadowRoot) {
+            el.shadowRoot.querySelectorAll("video").forEach(v => {
+              if (!out.includes(v)) out.push(v);
+            });
+          }
+        } catch (e) {}
+      });
+    } catch (e) {}
+    return out;
+  }
+
   // Scan for videos on the page
   function scanForVideos() {
     if (!document.body) return;
-    const videoElements = document.querySelectorAll("video");
-    videoElements.forEach((video) => {
+    findVideosDeep().forEach((video) => {
       if (!trackedVideos.has(video)) {
         try {
           setupVideoOverlay(video);
@@ -254,6 +483,14 @@
     });
     video.addEventListener("pointerdown", () => {
       activeVideo = video;
+    });
+    // Auto-finish an MSE recording when playback ends (tail flushes first).
+    video.addEventListener("ended", () => {
+      try {
+        if (pageMse && pageMse.video === video) {
+          setTimeout(() => stopMseRecording("ended"), 3000);
+        }
+      } catch (e) {}
     });
     video.addEventListener("loadedmetadata", () => {
       sniffVideoSources(video);
@@ -392,7 +629,9 @@
   const ITAG_WEBM = new Set([43, 242, 243, 244, 247, 248, 249, 250, 251, 271, 272, 302, 303, 313, 394, 395, 396, 397, 398, 399, 400, 401]);
   function getItagHeight(u) {
     const m = String(u || "").match(/[?&]itag=(\d+)\b/i);
-    return m ? (ITAG_HEIGHTS[parseInt(m[1], 10)] || 0) : 0;
+    if (!m) return 0;
+    const itag = parseInt(m[1], 10);
+    return ITAG_HEIGHTS[itag] || pagePlayerItagHeights.get(itag) || 0;
   }
   function getItagContainer(u) {
     const m = String(u || "").match(/[?&]itag=(\d+)\b/i);
@@ -404,6 +643,8 @@
   function isPlayableStreamUrl(u) {
     if (!u || typeof u !== "string") return false;
     if (!/^https?:\/\//i.test(u)) return false;
+    // SABR redirectors (?aitags=) play only inside the page handshake.
+    if (/[?&]aitags=/i.test(u)) return false;
     if (/bytestart|byteend|range=|\.m4s($|\?)|\.ts($|\?)|init\.mp4|init\.m4s|\/segment|\/frag|beacon|analytics|preview|thumb|poster|sprite|storyboard/i.test(u)) return false;
     return true;
   }
@@ -608,6 +849,8 @@
       if (found.length > 40 || !url || typeof url !== "string") return;
       url = url.trim().replace(/\\u0026/g, "&").replace(/\\\//g, "/").replace(/&amp;/g, "&");
       if (!/^https?:\/\//i.test(url) || url.length > 1500) return;
+      // SABR redirectors are handshake-only, never downloadable.
+      if (/[?&]aitags=/i.test(url)) return;
       // Extension-less playlist endpoints (player configs carry complete
       // HLS/DASH masters with auth params, e.g. hlsManifestUrl).
       const manifest = isManifest(url);
@@ -660,7 +903,68 @@
     return found;
   }
 
-  async function getGenericVideoItems(video, bgMediaList) {
+  // SABR rows: pure-SABR sessions (gated videos) have no directly
+  // downloadable single URL - only the browser's live segment traffic.
+  // Each row carries the full segment set; the app replays the ranges in
+  // byte order and concatenates = the rendition file. Representative URL
+  // doubles as the full-GET attempt (works when the edge serves it whole).
+  function buildSabrRows(sabrSets, title, postPageUrl, streamHeights) {
+    const rows = [];
+    try {
+      (sabrSets || []).forEach(set => {
+        const itag = parseInt(set.itag, 10) || 0;
+        const segs = (set.segments || []).filter(s => s && s.u && !isExpiredStreamUrl(s.u));
+        if (itag <= 0 || segs.length === 0) return;
+        const isAudio = ITAG_AUDIO.has(itag);
+        const h = isAudio ? 0 : (getItagHeight("?itag=" + itag) || pagePlayerItagHeights.get(itag) || 0);
+        if (!isAudio && h <= 0) return;
+        const key = isAudio ? "audio" : `${h}p`;
+        if (streamHeights.has(key)) return; // direct row already covers it
+        // Representative: un-ranged entry first, else the longest segment.
+        let rep = segs.find(s => !s.range) || segs.slice().sort((a, b) => (b.len || 0) - (a.len || 0))[0];
+        // Expected total from the rendition URL itself (clen= param).
+        let expected = 0;
+        try {
+          const m = String(rep.u).match(/[?&]clen=(\d+)/i);
+          if (m) expected = parseInt(m[1], 10) || 0;
+        } catch (e) {}
+        const collected = segs.reduce((n, s) => n + (s.len || 0), 0);
+        const init = pagePlayerInitRanges.get(itag) || null;
+        const label = isAudio ? "audio" : `${h}p`;
+        const ext = isAudio ? "m4a" : getItagContainer(rep.u);
+        const row = {
+          displayName: `${title} - ${label}.${isAudio ? "mp3" : ext}`,
+          title: `${title} - ${label}`,
+          quality: label,
+          format: isAudio ? "mp3" : ext,
+          url: rep.u,
+          pageUrl: postPageUrl,
+          referrer: postPageUrl,
+          userAgent: navigator.userAgent,
+          badge: isAudio ? "MP3" : label.toUpperCase(),
+          sub: isAudio ? `SABR audio • ${segs.length} parts` :
+            `SABR • ${segs.length} parts` +
+            (expected > 0 ? ` • ~${Math.round(collected / expected * 100)}% captured - play through to collect all` : " • play through to collect all"),
+          sabr: true,
+          itag: itag,
+          initRange: (init && init.init) || "",
+          segments: segs.map(s => ({ u: s.u, range: s.range || "" })),
+          expectedBytes: expected,
+          collectedBytes: collected
+        };
+        streamHeights.add(key);
+        rows.push(row);
+      });
+    } catch (e) {}
+    // Video first (best height first), audio last.
+    rows.sort((a, b) => {
+      const ha = parseInt(a.quality, 10) || -1, hb = parseInt(b.quality, 10) || -1;
+      return hb - ha;
+    });
+    return rows;
+  }
+
+  async function getGenericVideoItems(video, bgMediaList, sabrSets) {
     const context = getVideoContext(video);
     const postPageUrl = (context && context.pageUrl) || window.location.href;
     const title = (context && context.title) || getCleanVideoTitle(video);
@@ -678,9 +982,27 @@
     const combined = [...videoStreams, ...(bgMediaList || []), ...pageCapturedStreams];
     const uniqueMap = new Map();
     combined.forEach((m) => {
-      if (m && m.url && !uniqueMap.has(m.url)) {
-        uniqueMap.set(m.url, m);
+      if (!m || !m.url) return;
+      const existing = uniqueMap.get(m.url);
+      if (!existing) {
+        uniqueMap.set(m.url, { ...m });
+        return;
       }
+      // The video-element sniff usually sees a URL first but has no response
+      // headers. Merge the later webRequest record so size/type/auth headers
+      // are retained for filtering and for the app's exact-stream request.
+      Object.entries(m).forEach(([key, value]) => {
+        const isUsefulValue = value !== undefined && value !== null && value !== "";
+        if (!isUsefulValue) return;
+        const existingValue = existing[key];
+        if (key === "contentLengthBytes") {
+          if (!(Number(existingValue) > 0) && Number(value) > 0) existing[key] = value;
+        } else if (key === "streamHeaders") {
+          existing[key] = { ...(existingValue || {}), ...(value || {}) };
+        } else if (existingValue === undefined || existingValue === null || existingValue === "") {
+          existing[key] = value;
+        }
+      });
     });
     // Plus URLs embedded in the page itself (freshest tokens, page context)
     const embedded = collectPageEmbeddedMedia();
@@ -703,8 +1025,19 @@
       m.type === "hls" || m.type === "dash" ||
       /hls_playlist|hls_variant|manifest\.googlevideo\.com|\/manifest\/|\.m3u8(\?|#|$)|\.mpd(\?|#|$)/i.test(m.url || "") ||
       (m.contentType && (m.contentType.includes("mpegurl") || m.contentType.includes("dash")));
+    const getDirectSizeBytes = (m) => {
+      const bytes = Number(m.contentLengthBytes);
+      if (Number.isFinite(bytes) && bytes > 0) return bytes;
+      const size = String(m.size || "").match(/^\s*(\d+(?:\.\d+)?)\s*(B|KB|MB|GB)\s*$/i);
+      if (!size) return 0;
+      const unit = size[2].toUpperCase();
+      const multiplier = unit === "GB" ? 1024 ** 3 : unit === "MB" ? 1024 ** 2 : unit === "KB" ? 1024 : 1;
+      return Number(size[1]) * multiplier;
+    };
     const validMedia = Array.from(uniqueMap.values()).filter(m =>
       m.url &&
+      !isExpiredStreamUrl(m.url) &&
+      !/[?&]aitags=/i.test(m.url || "") &&
       !m.url.startsWith("blob:") &&
       !m.url.startsWith("data:") &&
       !m.url.includes("bytestart=") &&
@@ -725,8 +1058,8 @@
       // Tiny-file rule applies to DIRECT files only: masters/playlists are
       // legitimately a few KB (this rule used to eat IDM-style manifests).
       !(!isManifestEntry(m) &&
-        Number(m.contentLengthBytes) > 0 &&
-        Number(m.contentLengthBytes) < 256 * 1024)
+        getDirectSizeBytes(m) > 0 &&
+        getDirectSizeBytes(m) < 256 * 1024)
     );
 
     // Rendition-id streams (e.g. ?itag=22&): the exact bytes the browser is
@@ -738,9 +1071,28 @@
     validMedia.forEach(m => {
       if (m.type === "audio" || /[?&]sabr=\d/i.test(m.url)) return;
       const h = getItagHeight(m.url);
-      if (h <= 0 || itagVideo.has(h)) return;
+      if (h <= 0) return;
+      // Same height twice: keep the live capture, not the stale embed.
+      const prev = itagVideo.get(h);
+      if (prev && liveScore(prev) >= liveScore(m)) return;
       itagVideo.set(h, m);
     });
+    // Audio companion for video-only (DASH) renditions: the extension fully
+    // resolves BOTH streams so the app just downloads bytes (no page
+    // re-resolve, which is what age/login gates block).
+    const audioItag = validMedia.find(m => {
+      if (!/[?&]itag=\d+/i.test(m.url) || /[?&]sabr=\d/i.test(m.url)) return false;
+      if (m.type === "audio") return true;
+      // Embedded player URLs carry no audio markers in the URL itself;
+      // the rendition id is the signal (e.g. itag 140 = m4a audio).
+      const num = parseInt((m.url.match(/[?&]itag=(\d+)/i) || [])[1] || "0", 10);
+      return ITAG_AUDIO.has(num);
+    });
+    // Player-API audio has no itag marker in the page pool: use it when no
+    // captured audio rendition exists, so DASH rows still mux with sound.
+    const audioFallback = (!audioItag && pagePlayerAudioUrl && !isExpiredStreamUrl(pagePlayerAudioUrl)) ?
+      { url: pagePlayerAudioUrl, referer: postPageUrl, userAgent: navigator.userAgent } : null;
+    const audioForVideo = audioItag || audioFallback;
     Array.from(itagVideo.entries())
       .sort((a, b) => b[0] - a[0])
       .slice(0, 6)
@@ -759,17 +1111,68 @@
           referrer: m.referer || postPageUrl,
           userAgent: m.userAgent || navigator.userAgent,
           badge: label.toUpperCase(),
-          sub: `Direct stream • Res: (${w}x${h})`
+          sub: `Direct stream • Res: (${w}x${h})`,
+          audioUrl: (audioForVideo && audioForVideo.url && audioForVideo.url !== m.url) ? audioForVideo.url : "",
+          audioReferrer: (audioForVideo && audioForVideo.referer) || m.referer || postPageUrl
         });
       });
-    const audioItag = validMedia.find(m => {
-      if (!/[?&]itag=\d+/i.test(m.url) || /[?&]sabr=\d/i.test(m.url)) return false;
-      if (m.type === "audio") return true;
-      // Embedded player URLs carry no audio markers in the URL itself;
-      // the rendition id is the signal (e.g. itag 140 = m4a audio).
-      const num = parseInt((m.url.match(/[?&]itag=(\d+)/i) || [])[1] || "0", 10);
-      return ITAG_AUDIO.has(num);
-    });
+
+    // SABR segment rows (pure-SABR sessions): heights with no direct row get
+    // a segment-set row; the app replays the ranges and reassembles the file.
+    const sabrRows = buildSabrRows(sabrSets, title, postPageUrl, streamHeights);
+    const sabrAudio = sabrRows.find(r => r.quality === "audio") || null;
+    sabrRows.forEach(r => { if (r.quality !== "audio") items.push(r); });
+    if (sabrAudio) {
+      items.push(sabrAudio);
+      // SABR audio segments double as the companion for rows without one.
+      items.forEach(it => {
+        if (it.sabr && it.quality !== "audio" && !it.audioSegments) {
+          it.audioUrl = sabrAudio.url;
+          it.audioReferrer = postPageUrl;
+          it.audioSegments = sabrAudio.segments;
+          it.audioInitRange = sabrAudio.initRange || "";
+        }
+        if (!it.sabr && !it.audioUrl && !it.audioSegments &&
+            (it.quality || "").match(/^\d+p$/)) {
+          it.audioUrl = sabrAudio.url;
+          it.audioReferrer = postPageUrl;
+          it.audioSegments = sabrAudio.segments;
+          it.audioInitRange = sabrAudio.initRange || "";
+        }
+      });
+    }
+
+    // The browser can be playing a rendition whose signed URL is ciphered or
+    // otherwise absent from the directly captured itag list. Keep an honest
+    // page-resolved row for the actual decoded resolution so the menu cannot
+    // misleadingly stop at a lower captured quality (for example 720p while
+    // the video element is decoding 1080p).
+    const includeCurrentPlayingQuality = () => {
+      const h = videoHeight;
+      if (!Number.isFinite(h) || h < 144 || h > 4320) return;
+      const label = `${h}p`;
+      const existing = items.find(i => (i.quality || "").toLowerCase() === label);
+      if (existing) {
+        if (!/currently playing/i.test(existing.sub || "")) {
+          existing.sub = `${existing.sub || "Available quality"} • Currently playing`;
+        }
+        return;
+      }
+      const w = videoWidth > 0 ? videoWidth : Math.round(h * 16 / 9);
+      items.unshift({
+        displayName: `${title} - ${label}.mp4`,
+        title: `${title} - ${label}`,
+        quality: label,
+        format: "mp4",
+        url: postPageUrl,
+        pageUrl: postPageUrl,
+        referrer: postPageUrl,
+        userAgent: navigator.userAgent,
+              badge: label.toUpperCase(),
+              sub: `Currently playing • Res: (${w}x${h}) • via page`,
+              viaPage: true
+      });
+    };
 
     // 1. Check for HLS (.m3u8) or DASH (.mpd) stream.
     // Filter out audio-only tracks so video downloads NEVER receive audio-only URLs!
@@ -834,25 +1237,33 @@
         });
       } else {
         // Opaque player (no inspectable master): list every quality the page
-        // itself advertises for this video, each resolved by the app from the
-        // page URL. Labels come from embedded player configs, never invented.
-        const ladder = collectEmbeddedQualityLabels().filter(h =>
-          !items.some(i => (i.quality || "").toLowerCase() === `${h}p`));
+        // itself advertises for this video. Labels come from the player's
+        // own API response first, embedded configs second - never invented.
+        // Rows point at the FRESH manifest (all renditions, no page
+        // re-resolve) when one was captured, else the page URL.
+        const embeddedLadder = collectEmbeddedQualityLabels();
+        const ladder = [...new Set([...pagePlayerLadder, ...embeddedLadder])]
+          .sort((a, b) => b - a)
+          .filter(h => !items.some(i => (i.quality || "").toLowerCase() === `${h}p`));
         if (ladder.length > 0) {
+          const freshMaster = ((pagePlayerManifests[0] && !isExpiredStreamUrl(pagePlayerManifests[0].url) && pagePlayerManifests[0].url) ||
+            ((isMasterLike(streamItem.url) && !isRenditionLike(streamItem.url) && !isExpiredStreamUrl(streamItem.url)) ? streamItem.url : ""));
           ladder.forEach(h => {
             const label = `${h}p`;
             const w = Math.round(h * 16 / 9);
+            const viaPage = !freshMaster;
             items.push({
               displayName: `${title} - ${label}.mp4`,
               title: `${title} - ${label}`,
               quality: label,
               format: "mp4",
-              url: postPageUrl,
+              url: freshMaster || postPageUrl,
               pageUrl: postPageUrl,
               referrer: referrer,
               userAgent: userAgent,
               badge: label.toUpperCase(),
-              sub: `Available quality • Res: (${w}x${h})`
+              sub: `Available quality • Res: (${w}x${h})${viaPage ? " • via page" : ""}`,
+              viaPage: viaPage || undefined
             });
           });
           coveredByStream = true;
@@ -882,7 +1293,7 @@
         }
       }
 
-      const audioUrl = (audioItag && audioItag.url) || streamItem.url;
+      const audioUrl = (audioForVideo && audioForVideo.url) || streamItem.url;
       items.push({
         displayName: `${title} - Audio.mp3`,
         title: `${title} - Audio`,
@@ -890,8 +1301,8 @@
         format: "mp3",
         url: audioUrl,
         pageUrl: postPageUrl,
-        referrer: (audioItag && audioItag.referer) || streamItem.referer || postPageUrl,
-        userAgent: (audioItag && audioItag.userAgent) || streamItem.userAgent || navigator.userAgent,
+        referrer: (audioForVideo && audioForVideo.referer) || streamItem.referer || postPageUrl,
+        userAgent: (audioForVideo && audioForVideo.userAgent) || streamItem.userAgent || navigator.userAgent,
         badge: "MP3",
         sub: `Format: MP3 | Res: (Audio Only)`
       });
@@ -900,11 +1311,15 @@
       // advertised qualities + audio) are the complete working set. Anything
       // else captured on the page is a duplicate or a fragment - don't list it.
       // (Single unconfirmed fallback rows don't cover: direct files still apply.)
-      if (variants.length > 0 || coveredByStream) return items;
+      if (variants.length > 0 || coveredByStream) {
+        includeCurrentPlayingQuality();
+        return items;
+      }
     }
 
     // (streamHeights seeded above with exact-stream heights, so page-resolve
     // and direct rows never duplicate them.)
+    includeCurrentPlayingQuality();
     items.forEach(i => { const q = (i.quality || "").toLowerCase(); if (q) streamHeights.add(q); });
 
     // 2. Page-embedded direct files (freshest page-issued URLs first).
@@ -960,7 +1375,16 @@
     // download a broken file, the exact "entries that don't work" complaint.
     // Resolution: playing rendition first, URL hint second - never fabricated.
     const remainingDirects = directMediaItems.filter(m => !embeddedUrls.has(m.url));
-    const getDirectHeight = media => guessHeightFromUrl(media.url) || (media.url === directSrc ? videoHeight : 0);
+    // The player's chosen rendition (video.src) outranks <source> fallbacks:
+    // when every height is still unknown, pool order alone used to bury it
+    // below the fallbacks (and the 2-row cap finished the job).
+    remainingDirects.sort((a, b) => ((b.chosen ? 1 : 0) - (a.chosen ? 1 : 0)));
+    // <source size="720"> labels outrank guesses: exact player-declared rendition.
+    const getDirectHeight = media => {
+      const declared = parseInt(String((media && media.quality) || "").replace("p", ""), 10);
+      if (declared >= 144 && declared <= 4320) return declared;
+      return guessHeightFromUrl(media.url) || (media.url === directSrc ? videoHeight : 0);
+    };
     remainingDirects.sort((a, b) => getDirectHeight(b) - getDirectHeight(a));
     const seenDirectHeights = new Set(streamHeights);
     const hasKnownHeight = remainingDirects.some(media => getDirectHeight(media) > 0) || seenDirectHeights.size > 0;
@@ -972,13 +1396,16 @@
       seenDirectHeights.add(key);
       return true;
     });
-    uniqueDirects.slice(0, 2).forEach((m, idx) => {
+    uniqueDirects.slice(0, 4).forEach((m, idx) => {
       let ext = "mp4";
       const mExt = m.url.split("?")[0].match(/\.(mp4|webm|mkv|mov)($|\?)/i);
       if (mExt) ext = mExt[1].toLowerCase();
 
+      // Declared player labels first (same source as the dedupe above).
+      const declaredH = parseInt(String((m && m.quality) || "").replace("p", ""), 10);
       const urlH = guessHeightFromUrl(m.url);
-      const h = urlH > 0 ? urlH : (m.url === directSrc ? videoHeight : 0);
+      const h = (declaredH >= 144 && declaredH <= 4320) ? declaredH
+        : urlH > 0 ? urlH : (m.url === directSrc ? videoHeight : 0);
       const w = h === videoHeight && videoWidth > 0 ? videoWidth : (h > 0 ? Math.round(h * 16 / 9) : 0);
       const resStr = h > 0 ? `(${w}x${h})` : "";
       const codec = getCodecName(m.contentType || m.mimeType, ext);
@@ -1041,7 +1468,8 @@
           referrer: pageUrl,
           userAgent: navigator.userAgent,
           badge: res.label.toUpperCase(),
-          sub: `Available quality • Res: ${res.res}`
+          sub: `Available quality • Res: ${res.res} • via page`,
+          viaPage: true
         });
       }
       items.push({
@@ -1054,9 +1482,60 @@
         referrer: pageUrl,
         userAgent: navigator.userAgent,
         badge: "MP3",
-        sub: `Format: MP3 | Res: (Audio Only)`
+        sub: `Format: MP3 | Res: (Audio Only) • via page`,
+        viaPage: true
       });
     }
+
+    // MSE record row: the universal fallback. Transport-agnostic (SABR,
+    // UMS, anything MSE-based): records exactly what plays, at the quality
+    // the player is set to. Shown first when nothing directly downloadable
+    // was captured, last otherwise. Stop row while a recording runs.
+    const mseRecording = pageMse && pageMse.video === video;
+    if (mseRecording) {
+      items.unshift({
+        displayName: `${title} - Stop & save recording`,
+        title: `${title} - Recording`,
+        quality: "recording",
+        format: "mp4",
+        url: "",
+        isStopMse: true,
+        badge: "■ STOP",
+        sub: "Saves everything recorded so far into a video file"
+      });
+    } else {
+      const mseRow = {
+        displayName: `${title} - ● Record stream`,
+        title: `${title} - Recording`,
+        quality: "record",
+        format: "mp4",
+        url: "",
+        isStartMse: true,
+        badge: "● REC",
+        sub: "Set 1080p, play through - records exactly what plays"
+      };
+      const hasDirect = items.some(i =>
+        (i.segments && i.segments.length > 0) ||
+        (i.url && !String(i.url).includes("youtube.com/watch") &&
+         !String(i.url).includes("youtu.be/")));
+      if (hasDirect) items.push(mseRow);
+      else items.unshift(mseRow);
+    }
+
+    // A direct row upgrades (replaces) any via-page row of the same
+    // quality: never offer a re-resolve when the exact bytes were captured.
+    try {
+      const directQs = new Set(
+        items.filter(i => !i.viaPage && (i.quality || "").match(/^\d+p$/i))
+          .map(i => (i.quality || "").toLowerCase()));
+      for (let k = items.length - 1; k >= 0; k--) {
+        const it = items[k];
+        if (it.viaPage && it.quality !== "audio" &&
+            directQs.has((it.quality || "").toLowerCase())) {
+          items.splice(k, 1);
+        }
+      }
+    } catch (e) {}
 
     // Hard cap: the menu stays short. Every row above is a distinct,
     // working entry (real rendition, advertised quality, direct file,
@@ -1087,26 +1566,56 @@
 
   function sniffVideoSources(video) {
     const sources = [];
-    if (video.src) sources.push(video.src);
-    if (video.currentSrc) sources.push(video.currentSrc);
+    const pushSrc = (url, quality, chosen) => {
+      if (url) sources.push({ url, quality: quality || "", chosen: !!chosen });
+    };
+    // The element's own src is the rendition the player actually chose
+    // (here: the 1080p); <source> tags are just fallbacks. Flag it so it
+    // can never sort below them.
+    pushSrc(video.src, "", true);
+    pushSrc(video.currentSrc, "", true);
 
-    video.querySelectorAll("source").forEach((s) => {
-      if (s.src) sources.push(s.src);
-    });
+    // <source> tags incl. their size="720" labels (exact rendition labels,
+    // e.g. Pornbox players) + shadow-DOM players.
+    const collectSources = (root) => {
+      try {
+        root.querySelectorAll("source").forEach((s) => {
+          if (s.src) {
+            let q = "";
+            try {
+              const sizeAttr = s.getAttribute("size") || "";
+              const m = String(sizeAttr).match(/(\d{3,4})/);
+              if (m) q = `${parseInt(m[1], 10)}p`;
+            } catch (e) {}
+            pushSrc(s.src, q);
+          }
+        });
+      } catch (e) {}
+    };
+    collectSources(video);
+    try {
+      if (video.shadowRoot) collectSources(video.shadowRoot);
+      const host = video.getRootNode && video.getRootNode();
+      if (host && host !== document && host.querySelectorAll) collectSources(host);
+    } catch (e) {}
 
     const context = getVideoContext(video);
     const postPageUrl = (context && context.pageUrl) || window.location.href;
     const postTitle = (context && context.title) || getCleanVideoTitle(video);
 
-    sources.forEach((url) => {
+    sources.forEach((entry) => {
+      const url = entry.url;
       if (url && !url.startsWith("chrome-extension://") && !url.startsWith("blob:") && !url.startsWith("data:")) {
         const item = {
           url: url,
           title: postTitle,
           type: "video",
           referer: postPageUrl,
-          userAgent: navigator.userAgent
+          userAgent: navigator.userAgent,
+          time: Date.now()
         };
+        if (entry.quality) item.quality = entry.quality;
+        if (entry.chosen) item.chosen = true;
 
         if (!video._wrenchCapturedStreams) video._wrenchCapturedStreams = [];
         if (!video._wrenchCapturedStreams.some(s => s.url === url)) {
@@ -1135,6 +1644,10 @@
     menu.className = "wrench-dropdown-menu";
     menu._btn = btn;
     menu._video = video;
+
+    // Fresh DOM read at click time: players rewrite <video src>/<source>
+    // after init, so the scan-time snapshot may already be stale.
+    try { sniffVideoSources(video); } catch (e) {}
 
     // Blob: (MediaSource) players only fetch the real playlist once playing.
     // Start it so the concrete stream gets captured; the open menu refreshes
@@ -1185,9 +1698,12 @@
   }
 
   function dropdownItemsSignature(items) {
-    return (items || []).map((i) =>
-      `${i.displayName || i.title || ""}|${i.badge || ""}|${i.url || ""}|${i.sub || ""}`
-    ).join("\n");
+    return (items || []).map((i) => {
+      // SABR rows accumulate segments while playing: sign them stably so the
+      // open menu doesn't rebuild on every fetched chunk.
+      if (i.sabr) return `sabr|${i.quality || ""}|${i.url || ""}`;
+      return `${i.displayName || i.title || ""}|${i.badge || ""}|${i.url || ""}|${i.sub || ""}`;
+    }).join("\n");
   }
 
   async function populateDropdownItems(menu, video, btn) {
@@ -1197,11 +1713,13 @@
       // One pipeline for every page: no per-site branches.
       let items = [];
       let bgMedia = [];
+      let sabrSets = [];
       if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
         const response = await chrome.runtime.sendMessage({ action: "GET_MEDIA" }).catch(() => null);
         if (response && response.media) bgMedia = response.media;
+        if (response && response.sabr) sabrSets = response.sabr;
       }
-      items = await getGenericVideoItems(video, bgMedia);
+      items = await getGenericVideoItems(video, bgMedia, sabrSets);
       if (menu._populateGeneration !== generation) return;
 
       // Diff-render: identical list => don't touch the DOM at all (no flash).
@@ -1260,6 +1778,14 @@
               subEl.textContent = item.sub;
               return;
             }
+            if (item.isStartMse) {
+              startMseRecording(video);
+              return;
+            }
+            if (item.isStopMse) {
+              stopMseRecording("stop");
+              return;
+            }
             sendDownloadToApp(item);
             menu.remove();
             currentOpenMenu = null;
@@ -1293,6 +1819,15 @@
       pageUrl: item.pageUrl || window.location.href,
       referrer: item.referrer || document.referrer || window.location.href,
       userAgent: item.userAgent || navigator.userAgent,
+      audioUrl: item.audioUrl || "",
+      audioReferrer: item.audioReferrer || item.referrer || "",
+      sabr: !!item.sabr,
+      itag: item.itag || 0,
+      expectedBytes: item.expectedBytes || 0,
+      initRange: item.initRange || "",
+      audioInitRange: item.audioInitRange || "",
+      segments: (item.segments || []).slice(0, 1500).map(s => ({ u: s.u, range: s.range || "" })),
+      audioSegments: (item.audioSegments || []).slice(0, 1500).map(s => ({ u: s.u, range: s.range || "" })),
       prompt: true
     };
 

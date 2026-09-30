@@ -43,6 +43,14 @@ public partial class App : Application
         {
             System.IO.File.AppendAllText(logPath, $"[{System.DateTime.Now}] DOMAIN UNHANDLED EXCEPTION: {e.ExceptionObject}\n");
         };
+        System.AppDomain.CurrentDomain.ProcessExit += (s, e) =>
+        {
+            System.IO.File.AppendAllText(logPath, $"[{System.DateTime.Now}] PROCESS EXIT FIRED:\n{System.Environment.StackTrace}\n");
+        };
+        System.Threading.Tasks.TaskScheduler.UnobservedTaskException += (s, e) =>
+        {
+            System.IO.File.AppendAllText(logPath, $"[{System.DateTime.Now}] TASK UNOBSERVED EXCEPTION: {e.Exception}\n");
+        };
         InitializeComponent();
         System.IO.File.AppendAllText(logPath, $"[{System.DateTime.Now}] App() constructor completed\n");
     }
@@ -62,7 +70,6 @@ public partial class App : Application
             System.IO.File.AppendAllText(logPath, $"[{System.DateTime.Now}] MainWindow instantiated\n");
 
             bool startBackground = false;
-#if !DEBUG
             foreach (var arg in System.Environment.GetCommandLineArgs())
             {
                 if (string.Equals(arg, "--background", System.StringComparison.OrdinalIgnoreCase) ||
@@ -72,7 +79,6 @@ public partial class App : Application
                     break;
                 }
             }
-#endif
 
             if (!startBackground)
             {
@@ -81,7 +87,9 @@ public partial class App : Application
             }
             else
             {
-                System.IO.File.AppendAllText(logPath, $"[{System.DateTime.Now}] Started in background tray mode\n");
+                _window.Activate();
+                _window.AppWindow.Hide();
+                System.IO.File.AppendAllText(logPath, $"[{System.DateTime.Now}] Started in background tray mode (activated and hidden)\n");
             }
         }
         catch (System.Exception ex)

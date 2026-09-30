@@ -62,3 +62,5 @@ __pycache__/
 downloaded_*
 history.json
 startup.log
+IDM extension/
+.github/

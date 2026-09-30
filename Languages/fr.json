@@ -159,5 +159,9 @@
   "ext.copiedAddress": "Adresse copiée — collez-la dans la barre d’adresse de Chrome.",
   "ext.comingSoon": "Bientôt disponible",
   "main.extensionStaged": "Fichiers de l’extension prêts dans {0}.",
-  "main.extensionStageFailed": "Échec de la préparation de l’extension : {0}"
+  "main.extensionStageFailed": "Échec de la préparation de l’extension : {0}",
+  "resume.title": "Reprendre le téléchargement ?",
+  "resume.message": "« {0} » est téléchargé à {1} %. Reprendre où il s’est arrêté, ou relancer un nouveau téléchargement (enregistré comme copie numérotée) ?",
+  "resume.resume": "Reprendre",
+  "resume.startNew": "Recommencer"
 }

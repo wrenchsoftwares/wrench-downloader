@@ -1,4 +1,4 @@
-# 🔧 Wrench Downloader v26.2.3
+# 🔧 Wrench Downloader v26.2.4
 
 > High-speed multi-threaded media and file downloader with integrated Chrome Companion stream sniffer. An ultra-fast, modern alternative to IDM built with .NET 9 and Windows App SDK (WinUI 3).
 
@@ -24,7 +24,7 @@ Choose the interface language in **Settings → Language**. The selection is sav
 
 ### 1. Requirements
 - Windows 10 (version 1809 / build 17763) or Windows 11
-- Install with `WrenchDownloader-26.2.3-Setup.exe` (recommended: Start Menu entries, uninstaller, optional start-with-Windows). A portable ZIP is also available and needs no installation.
+- Install with `WrenchDownloader-26.2.4-Setup.exe` (recommended: Start Menu entries, uninstaller, optional start-with-Windows). A portable ZIP is also available and needs no installation.
 - Neither package requires a .NET installation. The .NET 9 SDK is only needed to build from source.
 
 ### 2. Build & Run Desktop App
@@ -39,9 +39,9 @@ dotnet run --project WrenchDownloader.csproj
 ```
 
 ### 3. Create a Release Package
-Primary distribution is the installer: run `./release-installer.ps1` from PowerShell (requires [Inno Setup 6](https://jrsoftware.org/isinfo.php)). It publishes the self-contained Windows x64 app and compiles `artifacts/releases/26.2.3/WrenchDownloader-26.2.3-Setup.exe`. Installed mode is non-portable: settings, history, and logs live in `%LOCALAPPDATA%\WrenchDownloader`.
+Primary distribution is the installer: run `./release-installer.ps1` from PowerShell (requires [Inno Setup 6](https://jrsoftware.org/isinfo.php)). It publishes the self-contained Windows x64 app and compiles `artifacts/releases/26.2.4/WrenchDownloader-26.2.4-Setup.exe`. Installed mode is non-portable: settings, history, and logs live in `%LOCALAPPDATA%\WrenchDownloader`.
 
-Portable alternative: run `./release.ps1` from PowerShell. It publishes a self-contained Windows x64 portable package at `artifacts/releases/26.2.3/WrenchDownloader-26.2.3-win-x64.zip`. Extract it to a writable folder and run `WrenchDownloader.exe` in the master folder. The Chrome extension is in `chrome extension`, app dependencies are grouped under `Runtime`, and settings, history, and startup logs stay in `Data`.
+Portable alternative: run `./release.ps1` from PowerShell. It publishes a self-contained Windows x64 portable package at `artifacts/releases/26.2.4/WrenchDownloader-26.2.4-win-x64.zip`. Extract it to a writable folder and run `WrenchDownloader.exe` in the master folder. The Chrome extension is in `chrome extension`, app dependencies are grouped under `Runtime`, and settings, history, and startup logs stay in `Data`.
 
 The package includes the application resource index (`WrenchDownloader.pri`) beside the executable so WinUI can resolve its XAML resources at startup. Downloads are saved to the user's Downloads folder by default.
 
@@ -66,12 +66,12 @@ wrench-downloader/
 ├── ExtensionBridgeServer.cs      # Local HTTP bridge server for Chrome extension
 ├── MainWindow.xaml               # Main dashboard & download queue
 ├── SettingsDialog.cs             # App settings & configuration
-├── Package.appxmanifest          # App package manifest (v26.2.3)
+├── Package.appxmanifest          # App package manifest (v26.2.4)
 ├── chrome extension/             # Chrome Manifest V3 Companion extension
 │   ├── injected.js               # In-page fetch / XHR stream interceptor
 │   ├── content.js                # Video detector & floating download overlay
 │   ├── background.js             # Network request sniffer & desktop bridge
-│   └── manifest.json             # Extension manifest (v26.2.3)
+│   └── manifest.json             # Extension manifest (v26.2.4)
 ├── docs/
 │   └── ARCHITECTURE.md           # In-depth architectural & download grabbing guide
 ├── tests/                        # Playwright verification and integration scripts

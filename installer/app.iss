@@ -6,7 +6,7 @@
 ; history and logs live in %LOCALAPPDATA%\WrenchDownloader (see PortablePaths).
 
 #ifndef MyAppVersion
-  #define MyAppVersion "26.2.4"
+  #define MyAppVersion "26.3.0"
 #endif
 #define MyAppName "Wrench Downloader"
 #define MyAppExe "WrenchDownloader.exe"

@@ -957,7 +957,7 @@ public sealed partial class MainWindow : Window
         
         var titleStack = new StackPanel { Spacing = 2 };
         titleStack.Children.Add(new TextBlock { Text = AppLocalization.Get("app.title"), FontSize = 18, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
-        titleStack.Children.Add(new TextBlock { Text = AppLocalization.Format("main.version", "26.2.4"), FontSize = 13, Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"] });
+        titleStack.Children.Add(new TextBlock { Text = AppLocalization.Format("main.version", "26.3.0"), FontSize = 13, Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"] });
         headerRow.Children.Add(titleStack);
         aboutPanel.Children.Add(headerRow);
 
@@ -997,7 +997,7 @@ public sealed partial class MainWindow : Window
 
     private void ApplyLocalization()
     {
-        _baseTitle = $"{AppLocalization.Get("app.title")} 26.2.4";
+        _baseTitle = $"{AppLocalization.Get("app.title")} 26.3.0";
         Title = _baseTitle;
         if (Content is FrameworkElement root)
             root.FlowDirection = AppLocalization.IsRightToLeft ? FlowDirection.RightToLeft : FlowDirection.LeftToRight;

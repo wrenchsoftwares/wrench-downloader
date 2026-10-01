@@ -103,6 +103,11 @@ public class DownloadItem : INotifyPropertyChanged
     public string AudioInitRange { get; set; } = "";
     public List<StreamSegment>? Segments { get; set; }
     public List<StreamSegment>? AudioSegments { get; set; }
+    /// <summary>Torrent download (magnet link). Files land directly in the
+    /// target folder; selection persists for pause/resume across restarts.</summary>
+    public bool IsTorrent { get; set; }
+    public string TorrentMagnet { get; set; } = "";
+    public List<string> TorrentFiles { get; set; } = new();
     /// <summary>Safe browser request headers captured for this exact media
     /// rendition. Used to reproduce the request Chrome already proved works.</summary>
     public Dictionary<string, string> StreamHeaders { get; set; } = new(StringComparer.OrdinalIgnoreCase);

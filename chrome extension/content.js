@@ -1795,6 +1795,43 @@
     }
   }
 
+  // Magnet-link takeover (IDM-style): route magnet: clicks to Wrench before
+  // page navigation or other managers see them. Window-level capture runs
+  // before document/bubble listeners, and the send is silent (no alerts).
+  function sendMagnetToApp(magnet) {
+    try {
+      if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
+        chrome.runtime.sendMessage({
+          action: "SEND_TO_APP",
+          payload: {
+            url: magnet,
+            title: magnet,
+            quality: "torrent",
+            format: "",
+            pageUrl: window.location.href,
+            referrer: document.referrer || window.location.href,
+            userAgent: navigator.userAgent,
+            prompt: true
+          }
+        }, () => { try { void chrome.runtime.lastError; } catch (e) {} });
+      }
+    } catch (e) {}
+  }
+
+  window.addEventListener("click", (e) => {
+    try {
+      if (e.defaultPrevented || (e.button !== undefined && e.button !== 0)) return;
+      const anchor = (e.target && e.target.closest) ? e.target.closest('a[href^="magnet:?"]') : null;
+      if (!anchor) return;
+      const magnet = anchor.href || anchor.getAttribute("href") || "";
+      if (!/^magnet:\?/i.test(magnet)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      try { if (e.stopImmediatePropagation) e.stopImmediatePropagation(); } catch (_) {}
+      sendMagnetToApp(magnet);
+    } catch (err) {}
+  }, true);
+
   // Periodic scan for video elements
   setInterval(scanForVideos, 1000);
   scanForVideos();

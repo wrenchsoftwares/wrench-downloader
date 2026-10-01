@@ -35,6 +35,12 @@ public class DownloadEngine
         TrackStart(item);
 #endif
 
+        if (item.IsTorrent || TorrentEngine.IsTorrentLink(item.Url))
+        {
+            await TorrentEngine.DownloadItemAsync(item, cancellationToken);
+            return;
+        }
+
         string configuredDownloadFolder = SettingsHelper.DownloadFolder;
         string downloadsFolder = item.TargetFolder;
         if (string.IsNullOrWhiteSpace(downloadsFolder) || !Directory.Exists(downloadsFolder))

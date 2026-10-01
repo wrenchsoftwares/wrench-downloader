@@ -24,6 +24,9 @@ public partial class App : Application
     private Window? _window;
 
     internal static Window? MainWindowInstance { get; private set; }
+
+    /// <summary>Magnet link from a protocol launch, handled once the main window is ready.</summary>
+    internal static string? PendingMagnet { get; set; }
     
     /// <summary>
     /// Initializes the singleton application object.  This is the first line of authored code
@@ -65,6 +68,33 @@ public partial class App : Application
         System.IO.File.AppendAllText(logPath, $"[{System.DateTime.Now}] OnLaunched start\n");
         try
         {
+            // Own the magnet: protocol (magnet-button clicks open Wrench).
+            MagnetProtocol.Register();
+
+            // Protocol launch: hand the magnet to the running instance and
+            // exit instead of opening a duplicate window.
+            string? launchMagnet = MagnetProtocol.TryGetLaunchMagnet();
+            if (!string.IsNullOrWhiteSpace(launchMagnet))
+            {
+                bool forwarded = false;
+                try
+                {
+                    // Off the UI thread: awaiting on it would deadlock against
+                    // WinUI's SynchronizationContext.
+                    forwarded = System.Threading.Tasks.Task.Run(
+                        () => MagnetProtocol.ForwardToRunningInstanceAsync(launchMagnet))
+                        .GetAwaiter().GetResult();
+                }
+                catch { }
+                System.IO.File.AppendAllText(logPath, $"[{System.DateTime.Now}] Protocol magnet launch, forwarded={forwarded}\n");
+                if (forwarded)
+                {
+                    Current.Exit();
+                    return;
+                }
+                PendingMagnet = launchMagnet;
+            }
+
             _window = new MainWindow();
             MainWindowInstance = _window;
             System.IO.File.AppendAllText(logPath, $"[{System.DateTime.Now}] MainWindow instantiated\n");

@@ -102,6 +102,18 @@ public sealed partial class MainWindow : Window
         // Start Extension Bridge Server
         _bridgeServer = new ExtensionBridgeServer(OnExtensionDownloadRequested);
         _bridgeServer.Start();
+
+        // Magnet from a protocol launch (we are the first instance).
+        if (!string.IsNullOrWhiteSpace(App.PendingMagnet))
+        {
+            string pendingMagnet = App.PendingMagnet;
+            App.PendingMagnet = null;
+            DispatcherQueue.TryEnqueue(async () =>
+            {
+                await Task.Delay(1500);
+                HandleMagnetAsync(pendingMagnet);
+            });
+        }
         UpdateClipboardMonitoring();
 
         // Prefetch the aria2c multi-connection engine in the background so
@@ -410,6 +422,31 @@ public sealed partial class MainWindow : Window
         prompt.ShowAndFocus();
     }
 
+    /// <summary>Magnet link flow: open the file picker immediately
+    /// (it resolves metadata inside); queue the selection on confirm.</summary>
+    private void HandleMagnetAsync(string magnet)
+    {
+        var dlg = new TorrentFilesWindow(magnet, (meta, selected, folder) =>
+        {
+            var item = new DownloadItem
+            {
+                Url = magnet,
+                Title = meta.Name,
+                Quality = "torrent",
+                IsTorrent = true,
+                TorrentMagnet = magnet,
+                TorrentFiles = selected,
+                TargetFolder = folder,
+                Status = DownloadStatus.Queued,
+                StatusText = AppLocalization.Get("download.queued")
+            };
+            Downloads.Insert(0, item);
+            StatusTextBlock.Text = AppLocalization.Format("main.started", item.Title);
+            QueueDownload(item);
+        });
+        dlg.ShowCentered(this);
+    }
+
     private void RemoveFromDownloadQueue(DownloadItem item)
     {
         _waitingDownloads.RemoveAll(waiting => waiting.Id == item.Id);
@@ -510,6 +547,14 @@ public sealed partial class MainWindow : Window
     private void OnExtensionDownloadRequested((DownloadItem item, bool showPrompt) request)
     {
         var (item, promptRequestedByCaller) = request;
+        // Magnet links (protocol clicks forwarded over the bridge, future
+        // extension magnet interception) always open the file picker.
+        if (TorrentEngine.IsTorrentLink(item.Url))
+        {
+            string magnet = item.Url;
+            DispatcherQueue.TryEnqueue(() => HandleMagnetAsync(magnet));
+            return;
+        }
         bool shouldPrompt = promptRequestedByCaller && SettingsHelper.ShowDownloadDialog;
 
         // Must dispatch to UI thread
@@ -676,6 +721,13 @@ public sealed partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(url))
         {
             StatusTextBlock.Text = AppLocalization.Get("main.invalidUrl");
+            return;
+        }
+
+        if (TorrentEngine.IsTorrentLink(url))
+        {
+            UrlTextBox.Text = string.Empty;
+            HandleMagnetAsync(url);
             return;
         }
 
@@ -1203,6 +1255,11 @@ public sealed partial class MainWindow : Window
             }
 
             _lastClipboardUrl = candidate;
+            if (TorrentEngine.IsTorrentLink(candidate))
+            {
+                DispatcherQueue.TryEnqueue(() => HandleMagnetAsync(candidate));
+                return;
+            }
             string title = Path.GetFileName(uri.AbsolutePath);
             if (string.IsNullOrWhiteSpace(title)) title = uri.Host;
             var item = new DownloadItem

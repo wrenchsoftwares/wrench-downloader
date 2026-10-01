@@ -59,6 +59,10 @@ Name: "{autodesktop}\Wrench Downloader"; Filename: "{app}\{#MyAppExe}"; Tasks: d
 ; Same Run value the app manages itself in SettingsHelper, so the installer
 ; checkbox and the in-app "Start with Windows" toggle never fight.
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "WrenchDownloader"; ValueData: """{app}\{#MyAppExe}"" --background"; Tasks: startup; Flags: uninsdeletevalue
+; Magnet-link ownership (magnet-button clicks open Wrench Downloader).
+Root: HKCR; Subkey: "magnet"; ValueType: string; ValueName: ""; ValueData: "URL:Magnet Protocol"; Flags: uninsdeletekey
+Root: HKCR; Subkey: "magnet"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKCR; Subkey: "magnet\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExe}"" ""%1"""
 
 [Run]
 Filename: "{app}\{#MyAppExe}"; Description: "{cm:LaunchProgram,Wrench Downloader}"; Flags: nowait postinstall skipifsilent

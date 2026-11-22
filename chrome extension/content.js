@@ -1753,23 +1753,51 @@
       if (replacement && isConcreteStreamUrl(replacement)) item.url = replacement;
     }
 
+    const page = item.pageUrl || window.location.href;
+    let isYouTube = false;
+    try {
+      const host = new URL(page).hostname.toLowerCase();
+      isYouTube = host === "youtube.com" || host.endsWith(".youtube.com") || host === "youtu.be";
+    } catch (e) {}
+
+    let sendUrl = item.url;
+    let sendQuality = item.quality || "best";
+    let sendSegments = (item.segments || []).slice(0, 1500).map(s => ({ u: s.u, range: s.range || "" }));
+    let sendAudioSegments = (item.audioSegments || []).slice(0, 1500).map(s => ({ u: s.u, range: s.range || "" }));
+    let sendAudioUrl = item.audioUrl || "";
+    let sendSabr = !!item.sabr;
+    let sendItag = item.itag || 0;
+
+    // YouTube: hand the app the video page URL plus fresh login cookies.
+    // yt-dlp resolves the formats itself; signed videoplayback URLs expire
+    // between capture and download and produce dead-link errors.
+    if (isYouTube) {
+      sendUrl = page;
+      sendSegments = [];
+      sendAudioSegments = [];
+      sendAudioUrl = "";
+      sendSabr = false;
+      sendItag = 0;
+      if (!sendQuality || /^\d+$/.test(sendQuality) === false) sendQuality = "best";
+    }
+
     const payload = {
-      url: item.url,
+      url: sendUrl,
       title: item.title || document.title,
-      quality: item.quality || "best",
+      quality: sendQuality,
       format: item.format || "mp4",
-      pageUrl: item.pageUrl || window.location.href,
+      pageUrl: page,
       referrer: item.referrer || document.referrer || window.location.href,
       userAgent: item.userAgent || navigator.userAgent,
-      audioUrl: item.audioUrl || "",
+      audioUrl: sendAudioUrl,
       audioReferrer: item.audioReferrer || item.referrer || "",
-      sabr: !!item.sabr,
-      itag: item.itag || 0,
-      expectedBytes: item.expectedBytes || 0,
-      initRange: item.initRange || "",
-      audioInitRange: item.audioInitRange || "",
-      segments: (item.segments || []).slice(0, 1500).map(s => ({ u: s.u, range: s.range || "" })),
-      audioSegments: (item.audioSegments || []).slice(0, 1500).map(s => ({ u: s.u, range: s.range || "" })),
+      sabr: sendSabr,
+      itag: sendItag,
+      expectedBytes: 0,
+      initRange: "",
+      audioInitRange: "",
+      segments: sendSegments,
+      audioSegments: sendAudioSegments,
       prompt: true
     };
 

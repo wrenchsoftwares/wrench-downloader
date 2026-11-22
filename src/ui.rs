@@ -18,17 +18,7 @@ pub struct AppRuntime {
     pub engine: EngineHandle,
     pub settings: Arc<Mutex<Settings>>,
     pub localization: Arc<Localization>,
-}
-
-struct PromptState {
-    item: DownloadItem,
-    id: String,
-    title: String,
-    url: String,
-    folder: String,
-    playlist: bool,
-    later: bool,
-    dirty: bool,
+    pub ui_tx: tokio::sync::mpsc::UnboundedSender<UiEvent>,
 }
 
 struct TorrentPickerState {
@@ -40,8 +30,6 @@ struct TorrentPickerState {
 pub struct AppView {
     runtime: AppRuntime,
     url_input: Entity<InputState>,
-    prompt_title: Entity<InputState>,
-    prompt_folder: Entity<InputState>,
     settings_folder: Entity<InputState>,
     settings_dirty: bool,
     status: String,
@@ -49,7 +37,6 @@ pub struct AppView {
     settings_open: bool,
     settings_draft: Settings,
     about_open: bool,
-    prompt: Option<PromptState>,
     torrent_picker: Option<TorrentPickerState>,
     confirm_delete: Option<String>,
     settings_tab: usize,
@@ -59,15 +46,11 @@ impl AppView {
     pub fn new(
         runtime: AppRuntime,
         url_input: Entity<InputState>,
-        prompt_title: Entity<InputState>,
-        prompt_folder: Entity<InputState>,
         settings_folder: Entity<InputState>,
     ) -> Self {
         Self {
             runtime,
             url_input,
-            prompt_title,
-            prompt_folder,
             settings_folder,
             settings_dirty: false,
             status: "Ready. Files and streams captured from your browser will prompt for download.".into(),
@@ -75,7 +58,6 @@ impl AppView {
             settings_open: false,
             settings_draft: Settings::default(),
             about_open: false,
-            prompt: None,
             torrent_picker: None,
             confirm_delete: None,
             settings_tab: 0,
@@ -114,16 +96,10 @@ impl AppView {
                 let should_prompt = prompt && self.runtime.settings.lock().show_download_dialog;
                 if should_prompt {
                     crate::paths::log_line(&format!("prompt shown for {}", item.id));
-                    self.prompt = Some(PromptState {
-                        item: item.clone(),
-                        id: item.id.clone(),
-                        title: item.title.clone(),
-                        url: if item.page_url == item.url && !item.page_url.is_empty() { "Waiting for fresh stream capture...".into() } else { item.url.clone() },
-                        folder: if item.target_folder.is_empty() { self.runtime.settings.lock().download_folder.clone() } else { item.target_folder.clone() },
-                        playlist: item.download_playlist,
-                        later: item.wait_for_queue_start,
-                        dirty: true,
-                    });
+                    match crate::prompt::open_prompt_window(self.runtime.clone(), item.clone(), cx) {
+                        Ok(_) => crate::paths::log_line("prompt window opened"),
+                        Err(e) => crate::paths::log_line(&format!("prompt window FAILED: {}", e)),
+                    }
                 } else {
                     self.runtime.store.add(item.clone(), true);
                     self.runtime.engine.start(&item.id);
@@ -162,34 +138,6 @@ impl AppView {
         self.runtime.engine.start(&item.id);
         self.status = self.tr("main.started");
         model::save_history(&self.snapshot_items());
-        cx.notify();
-    }
-
-    fn start_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(prompt) = self.prompt.take() else { return };
-        let title = self.prompt_title.read(cx).value().trim().to_string();
-        let folder = self.prompt_folder.read(cx).value().trim().to_string();
-        let id = prompt.id.clone();
-        crate::paths::log_line(&format!("prompt start clicked for {}", id));
-        let later = prompt.later;
-        let mut item = prompt.item;
-        if !title.is_empty() { item.title = title; }
-        if std::path::Path::new(&folder).is_dir() { item.target_folder = folder; }
-        item.download_playlist = prompt.playlist;
-        item.wait_for_queue_start = later;
-        item.scheduled_at = None;
-        item.queue_name = "Main queue".into();
-        item.status = DownloadStatus::Queued;
-        item.status_text = if later { "Saved for later in Main queue".into() } else { "Waiting in queue".into() };
-        self.runtime.store.add(item, true);
-        if !later {
-            self.runtime.engine.start(&id);
-            self.status = self.tr("main.started");
-        } else {
-            self.status = "Saved for later in Main queue".into();
-        }
-        model::save_history(&self.snapshot_items());
-        let _ = window;
         cx.notify();
     }
 
@@ -269,15 +217,6 @@ impl Render for AppView {
         if std::env::var_os("WD_MINIMAL_UI").is_some() {
             return div().size_full().child("minimal UI").into_any_element();
         }
-        if self.prompt.as_ref().is_some_and(|p| p.dirty) {
-            if let Some(p) = self.prompt.as_ref() {
-                let title = p.title.clone(); let folder = p.folder.clone();
-                self.prompt_title.update(cx, |s, cx| s.set_value(title, window, cx));
-                self.prompt_folder.update(cx, |s, cx| s.set_value(folder, window, cx));
-            }
-            self.prompt.as_mut().unwrap().dirty = false;
-        }
-
         let theme = cx.theme().clone();
         let mut root = div()
             .size_full()
@@ -291,7 +230,6 @@ impl Render for AppView {
 
         // Overlays
         if self.settings_open { root = root.child(self.render_settings(window, cx)); }
-        if let Some(prompt) = self.prompt.as_ref() { root = root.child(self.render_prompt(prompt, cx)); }
         if self.about_open { root = root.child(self.render_about(cx)); }
         if let Some(picker) = self.torrent_picker.as_ref() { root = root.child(self.render_torrent_picker(picker, cx)); }
         if self.confirm_delete.is_some() { root = root.child(self.render_confirm_delete(cx)); }
@@ -421,53 +359,6 @@ impl AppView {
 }
 
 impl AppView {
-    fn render_prompt(&self, prompt: &PromptState, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
-        let id = prompt.id.clone();
-        let folder = prompt.folder.clone();
-        let url = prompt.url.clone();
-        let playlist = prompt.playlist;
-        let later = prompt.later;
-        div().absolute().inset_0().flex().items_center().justify_center()
-            .bg(gpui::black().alpha(0.55))
-            .child(
-                div().w(px(560.)).max_h(px(760.)).p_5().rounded_lg()
-                    .bg(theme.background).border_1().border_color(theme.border)
-                    .flex().flex_col().gap_3()
-                    .child(Label::new("Start Download").text_lg())
-                    .child(Label::new("File name").text_sm())
-                    .child(Input::new(&self.prompt_title))
-                    .child(Label::new("URL").text_sm())
-                    .child(div().max_h(px(90.)).p_2().rounded_md().bg(theme.input_background())
-                        .child(Label::new(url).text_sm().text_color(theme.muted_foreground)))
-                    .child(Checkbox::new("prompt-playlist").label("Download the full playlist")
-                        .checked(playlist)
-                        .on_change(cx.listener({
-                            let id = id.clone();
-                            move |this, v: &bool, _, cx| {
-                                if let Some(p) = this.prompt.as_mut() { p.playlist = *v; }
-                                let _ = &id;
-                                cx.notify();
-                            }
-                        })))
-                    .child(Label::new("Save folder").text_sm())
-                    .child(Input::new(&self.prompt_folder))
-                    .child(Checkbox::new("prompt-later").label("Download later")
-                        .checked(later)
-                        .on_change(cx.listener(|this, v: &bool, _, cx| {
-                            if let Some(p) = this.prompt.as_mut() { p.later = *v; }
-                            cx.notify();
-                        })))
-                    .child(Label::new(folder).text_xs().text_color(theme.muted_foreground))
-                    .child(div().flex().flex_row().justify_end().gap_2().pt_2()
-                        .child(Button::new("prompt-cancel").label("Cancel")
-                            .on_click(cx.listener(|this, _, _, cx| { this.prompt = None; cx.notify(); })))
-                        .child(Button::new("prompt-start").primary()
-                            .label(if later { "Save for later" } else { "Start Download" })
-                            .on_click(cx.listener(|this, _, window, cx| this.start_prompt(window, cx)))))
-            )
-    }
-
     fn render_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.settings_dirty {
             let folder = self.settings_draft.download_folder.clone();

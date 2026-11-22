@@ -100,6 +100,20 @@ Dev smoke test with portable data (keeps `%LOCALAPPDATA%` untouched):
 - Progress caps at 99 until finalize; partial `.part` bytes are kept on cancellation.
 - Credentials are scrubbed from `history.json` snapshots on save and on load.
 
+## Browser → app handoff
+
+- For YouTube, the extension must send the **video page URL**
+  (`https://www.youtube.com/watch?v=...`) plus fresh youtube.com/google.com
+  cookies. Signed `googlevideo` playback URLs die between capture and use;
+  if one is used anyway, fall back to yt-dlp on `page_url` with the same cookies.
+- `--cookies-from-browser brave/chrome/edge` is only a last resort when the
+  extension supplied no cookies. Never probe other browsers when a fresh jar
+  exists — it produces misleading "could not find browser cookies database"
+  errors.
+- The prompt is a separate OS window (`src/prompt.rs`, `gpui_kit::open_window`).
+  Call `cx.activate(true)` and `window.activate_window()` so Windows brings it
+  forward instead of leaving it behind the browser/taskbar.
+
 ## Prompt flow
 
 - The `prompt: true` bridge path must keep the **whole `DownloadItem`** in the

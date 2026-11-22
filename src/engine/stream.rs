@@ -287,14 +287,19 @@ pub async fn ytdlp_download(
     let cookie_arg = |jar: &Option<PathBuf>| -> Vec<String> {
         jar.as_ref().map(|p| vec!["--cookies".into(), p.to_string_lossy().into_owned()]).unwrap_or_default()
     };
+    // Fresh cookies captured by the browser extension are the primary session
+    // source. Attach them to every attempt; only fall back to
+    // --cookies-from-browser when the extension supplied none.
+    let has_jar = jar.is_some();
     let mut plan: Vec<(String, Vec<String>)> = Vec::new();
     if challenge_jar.is_some() {
         plan.push((item.page_url.clone(), cookie_arg(&challenge_jar)));
-        plan.push((item.page_url.clone(), vec!["--cookies-from-browser".into(), "chrome".into()]));
+        if !has_jar {
+            plan.push((item.page_url.clone(), vec!["--cookies-from-browser".into(), "chrome".into()]));
+        }
     }
-    for (idx, url) in candidates.iter().enumerate() {
-        let signed = classify::is_captured_playback(url) || classify::is_manifest_url(url);
-        let cargs = if idx == 0 && signed && jar.is_some() { cookie_arg(&jar) } else { Vec::new() };
+    for url in candidates.iter() {
+        let cargs = if has_jar { cookie_arg(&jar) } else { Vec::new() };
         plan.push((url.clone(), cargs));
     }
     if plan.is_empty() { anyhow::bail!("no candidate URLs"); }
@@ -363,15 +368,20 @@ pub async fn ytdlp_download(
         if is_expired(&error_text) {
             anyhow::bail!("link expired");
         }
-        if is_gated_error(&error_text) && cookie_args.is_empty() {
-            if let Some(j) = &jar {
-                plan.insert(idx + 1, (url.clone(), vec!["--cookies".into(), j.to_string_lossy().into_owned()]));
+        if is_gated_error(&error_text) {
+            if has_jar {
+                // The extension already gave us fresh session cookies. Do not
+                // probe other browsers (chrome/edge/brave) - that is both slow
+                // and wrong when the click happened in Chrome.
+                anyhow::bail!("login or age gate with fresh browser cookies - verify the account in Chrome and retry");
             }
-            for browser in ["chrome", "edge", "brave"] {
-                plan.push((item.page_url.clone(), vec!["--cookies-from-browser".into(), browser.into()]));
+            if cookie_args.is_empty() {
+                for browser in ["chrome", "edge"] {
+                    plan.push((item.page_url.clone(), vec!["--cookies-from-browser".into(), browser.into()]));
+                }
+                idx += 1;
+                continue;
             }
-            idx += 1;
-            continue;
         }
         if is_rate_limit(&error_text) && idx < plan.len() - 1 {
             update(store, ui, id, |i| i.status_text = "Rate limited, retrying...".into());

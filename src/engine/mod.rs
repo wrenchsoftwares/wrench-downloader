@@ -235,10 +235,33 @@ async fn run_download(
     let result = match kind {
         UrlKind::Torrent => torrent::download(&store, &settings, &ui, &id, snapshot).await,
         UrlKind::SabrRedirector | UrlKind::Playback => {
-            if snapshot.is_sabr && snapshot.segments.as_ref().is_some_and(|s| !s.is_empty()) {
-                stream::sabr_download(&store, &settings, &ui, &id, snapshot).await
+            let direct = if snapshot.is_sabr && snapshot.segments.as_ref().is_some_and(|s| !s.is_empty()) {
+                stream::sabr_download(&store, &settings, &ui, &id, snapshot.clone()).await
             } else {
-                stream::extension_resolved_download(&store, &settings, &ui, &id, snapshot).await
+                stream::extension_resolved_download(&store, &settings, &ui, &id, snapshot.clone()).await
+            };
+            match direct {
+                Ok(path) => Ok(path),
+                Err(err) => {
+                    let msg = err.to_string();
+                    // A captured signed URL can die between capture and use.
+                    // Fall back to the page URL with the same fresh cookies
+                    // instead of failing immediately.
+                    if !token.is_cancelled()
+                        && !stream::requires_fresh_capture(&msg)
+                        && !snapshot.page_url.is_empty()
+                    {
+                        update(&store, &ui, &id, |i| {
+                            i.status_text = "Captured stream failed - retrying via page...".into();
+                            i.progress = 0.0;
+                        });
+                        let mut fallback = snapshot.clone();
+                        fallback.url = fallback.page_url.clone();
+                        stream::ytdlp_download(&store, &settings, &ui, &id, fallback).await
+                    } else {
+                        Err(err)
+                    }
+                }
             }
         }
         UrlKind::Manifest | UrlKind::Page => {

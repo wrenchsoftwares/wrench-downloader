@@ -4,6 +4,7 @@ mod localization;
 mod model;
 mod paths;
 mod platform;
+mod prompt;
 mod ui;
 
 use engine::{DownloadStore, UiEvent};
@@ -53,6 +54,7 @@ fn main() -> anyhow::Result<()> {
         engine,
         settings,
         localization,
+        ui_tx: ui_tx.clone(),
     };
 
     gpui_kit::application()
@@ -72,10 +74,8 @@ fn main() -> anyhow::Result<()> {
             |window, cx| {
                 let runtime = app_runtime.clone();
                 let url_input = cx.new(|cx| InputState::new(window, cx).placeholder("Paste download or video URL..."));
-                let prompt_title = cx.new(|cx| InputState::new(window, cx));
-                let prompt_folder = cx.new(|cx| InputState::new(window, cx));
                 let settings_folder = cx.new(|cx| InputState::new(window, cx));
-                let view = cx.new(|_| ui::AppView::new(runtime, url_input, prompt_title, prompt_folder, settings_folder));
+                let view = cx.new(|_| ui::AppView::new(runtime, url_input, settings_folder));
 
                 // Relay engine events onto the UI thread.
                 let weak = view.downgrade();

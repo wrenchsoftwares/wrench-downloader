@@ -92,20 +92,42 @@ pub(crate) async fn run_process(
     Ok(output)
 }
 
+fn safe_cookie_field(s: &str, trim: bool) -> Option<String> {
+    // Netscape files are strictly tab-separated, one cookie per line. A single
+    // embedded tab/newline makes yt-dlp reject the whole file.
+    if s.contains(['\t', '\n', '\r']) { return None; }
+    let value = if trim { s.trim().to_string() } else { s.to_string() };
+    if value.is_empty() { None } else { Some(value) }
+}
+
 fn write_cookie_jar(item: &DownloadItem, prefix: &str) -> Option<PathBuf> {
     let cookies = item.cookies.as_ref()?;
     if cookies.is_empty() { return None; }
     let path = crate::paths::Paths::get().parts().join(format!("{}_{}.txt", prefix, uuid::Uuid::new_v4().simple()));
     let _ = std::fs::create_dir_all(path.parent()?);
     let mut text = String::from("# Netscape HTTP Cookie File\n");
+    let mut written = 0usize;
     for c in cookies {
-        let domain = if c.domain.starts_with('.') { c.domain.clone() } else { format!(".{}", c.domain) };
-        let flag = if c.domain.starts_with('.') { "TRUE" } else { "FALSE" };
+        let (Some(name), Some(domain), Some(cookie_path), Some(value)) = (
+            safe_cookie_field(&c.name, true),
+            safe_cookie_field(&c.domain, true),
+            safe_cookie_field(&c.path, true),
+            safe_cookie_field(&c.value, false),
+        ) else { continue };
+        let flag = if domain.starts_with('.') { "TRUE" } else { "FALSE" };
+        let domain = if domain.starts_with('.') { domain } else { format!(".{}", domain) };
         text.push_str(&format!("{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
-            domain, flag, c.path, if c.secure { "TRUE" } else { "FALSE" },
-            if c.expiry > 0 { c.expiry } else { 0 }, c.name, c.value));
+            domain, flag, cookie_path, if c.secure { "TRUE" } else { "FALSE" },
+            if c.expiry > 0 { c.expiry } else { 0 }, name, value));
+        written += 1;
+    }
+    if written == 0 {
+        let _ = std::fs::remove_file(&path);
+        tracing::warn!("no usable browser cookies; continuing without a cookie jar");
+        return None;
     }
     std::fs::write(&path, text).ok()?;
+    crate::paths::log_line(&format!("cookie jar {} with {} entries", path.display(), written));
     Some(path)
 }
 

@@ -139,6 +139,10 @@ Dev smoke test with portable data (keeps `%LOCALAPPDATA%` untouched):
 - The extension gathers fresh cookies for youtube.com **and** google.com at
   send time (`collectFreshSessionCookies` in `background.js`). Reload the
   extension and refresh video tabs after changing it.
+- Cookie jars must be strictly 7 tab-separated fields per line. Skip cookies
+  whose name/domain/path/value contain tabs or newlines, and omit `--cookies`
+  entirely if none survive — otherwise yt-dlp rejects the whole file with
+  "invalid Netscape format cookies file". Log cookie counts only, never values.
 - Debug builds panic with `Duplicate a11y node id` when repeated labels share
   an implicit id. Give labels inside repeated download cards explicit per-item
   `ElementId`s.

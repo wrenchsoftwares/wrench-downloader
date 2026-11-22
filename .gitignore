@@ -67,3 +67,6 @@ IDM extension/
 
 # Rust build output
 target/
+
+# Runtime data (history may contain metadata; Parts holds temporary cookie jars)
+Data/

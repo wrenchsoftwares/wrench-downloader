@@ -1,3 +1,6 @@
+// Windows GUI app: no console window when launched from Explorer/taskbar.
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 mod bridge;
 mod engine;
 mod localization;

@@ -1443,10 +1443,54 @@
       }
     } catch (e) {}
 
-    // Hard cap: the menu stays short. Every row above is a distinct,
-    // working entry (real rendition, advertised quality, direct file,
-    // or page fallback).
-    return items.slice(0, 10);
+    // IDM/ODM-style quality ladder: offer the standard resolutions as
+    // page-resolve targets. These are NOT claimed as captured renditions -
+    // the desktop app sends the page URL + fresh session cookies to yt-dlp,
+    // which reads the video's real format list and resolves the chosen height
+    // (falling back to the closest one if it is unavailable).
+    try {
+      const hasVideo = document.querySelector("video") ||
+        items.some(i => i.quality && /^\d+p$/i.test(i.quality));
+      if (hasVideo && /^https?:\/\//i.test(postPageUrl)) {
+        const existing = new Set(items.map(i => (i.quality || "").toLowerCase()));
+        [2160, 1440, 1080, 720, 480, 360, 240, 144].forEach(h => {
+          const label = `${h}p`;
+          if (existing.has(label)) return;
+          existing.add(label);
+          items.push({
+            displayName: `${title} - ${label}.mp4`,
+            title: `${title} - ${label}`,
+            quality: label,
+            format: "mp4",
+            url: postPageUrl,
+            pageUrl: postPageUrl,
+            referrer: postPageUrl,
+            userAgent: navigator.userAgent,
+            badge: label.toUpperCase(),
+            sub: "Resolve via app • yt-dlp reads the page formats",
+            viaPage: true
+          });
+        });
+        if (!existing.has("audio")) {
+          items.push({
+            displayName: `${title} - audio.mp3`,
+            title: `${title} - audio`,
+            quality: "audio",
+            format: "mp3",
+            url: postPageUrl,
+            pageUrl: postPageUrl,
+            referrer: postPageUrl,
+            userAgent: navigator.userAgent,
+            badge: "MP3",
+            sub: "Resolve via app • audio only",
+            viaPage: true
+          });
+        }
+      }
+    } catch (e) {}
+
+    // Keep the full ladder available (IDM shows all qualities too).
+    return items.slice(0, 24);
   }
 
   // Every quality the page advertises for its video, best first. Harvested
@@ -1731,7 +1775,7 @@
     // otherwise not a stream). Concrete streams keep their exact URL: the
     // old extension-check rewrote extension-less itag URLs (e.g. YouTube
     // 1080p videoplayback) to the newest capture of ANY type - often audio.
-    if (item.url === item.pageUrl || !isConcreteStreamUrl(item.url)) {
+    if (!item.viaPage && (item.url === item.pageUrl || !isConcreteStreamUrl(item.url))) {
       const wantAudio = (item.quality || "").toLowerCase() === "audio";
       let replacement = "";
       if (activeVideo && activeVideo.currentSrc && isConcreteStreamUrl(activeVideo.currentSrc)) {

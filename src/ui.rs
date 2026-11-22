@@ -381,14 +381,14 @@ impl AppView {
                                 cx.notify();
                             }
                         })))
-                    .child(Label::new(&snapshot.title).flex_1())
-                    .child(Label::new(&snapshot.speed_text).text_sm().text_color(theme.accent))
+                    .child(Label::new(&snapshot.title).flex_1().id(format!("title-{}", id)))
+                    .child(Label::new(&snapshot.speed_text).text_sm().text_color(theme.accent).id(format!("speed-{}", id)))
             )
             .child(Progress::new(format!("progress-{}", id)).value(snapshot.progress as f32))
             .child(
                 div().flex().flex_row().gap_3()
-                    .child(Label::new(&snapshot.status_text).text_sm().flex_1().text_color(theme.muted_foreground))
-                    .child(Label::new(format!("{} • {}", snapshot.size_text, snapshot.eta_text)).text_xs().text_color(theme.muted_foreground))
+                    .child(Label::new(&snapshot.status_text).text_sm().flex_1().text_color(theme.muted_foreground).id(format!("status-{}", id)))
+                    .child(Label::new(format!("{} • {}", snapshot.size_text, snapshot.eta_text)).text_xs().text_color(theme.muted_foreground).id(format!("size-{}", id)))
             );
         if snapshot.status != DownloadStatus::Completed {
             let action = snapshot.action_glyph().to_string();
@@ -516,6 +516,21 @@ impl AppView {
                             let path = crate::paths::Paths::get().resource("chrome extension");
                             #[cfg(target_os = "windows")] { std::process::Command::new("explorer.exe").arg(path).spawn().ok(); }
                             #[cfg(not(target_os = "windows"))] { let _ = path; }
+                        })))
+                    .child(Button::new("copy-extension-path").label("Copy extension path")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            let path = crate::paths::Paths::get().resource("chrome extension");
+                            let text = path.to_string_lossy().into_owned();
+                            if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                                if clipboard.set_text(&text).is_ok() {
+                                    this.status = format!("Copied extension path: {}", text);
+                                } else {
+                                    this.status = "Could not copy extension path".into();
+                                }
+                            } else {
+                                this.status = "Could not access clipboard".into();
+                            }
+                            cx.notify();
                         })));
             }
             _ => {

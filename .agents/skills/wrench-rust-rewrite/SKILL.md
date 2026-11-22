@@ -100,6 +100,24 @@ Dev smoke test with portable data (keeps `%LOCALAPPDATA%` untouched):
 - Progress caps at 99 until finalize; partial `.part` bytes are kept on cancellation.
 - Credentials are scrubbed from `history.json` snapshots on save and on load.
 
+## yt-dlp path — verified fixes
+
+- Prefer **Deno** over Node for `--js-runtimes`; always pass
+  `--remote-components ejs:github` and `--merge-output-format mp4`.
+- Do **not** pass `--impersonate chrome` unless the installed yt-dlp supports
+  impersonation targets — the current install aborts with
+  `Impersonate target "chrome" is not available`.
+- Classify extensionless page URLs (e.g. `/watch?v=...`) as `UrlKind::Page`.
+  Treating them as `Direct` downloads the HTML page instead of invoking yt-dlp.
+- Validate finished media by extension **and** magic bytes; an HTML error page
+  over 1 MiB must never be reported as Completed.
+- The extension gathers fresh cookies for youtube.com **and** google.com at
+  send time (`collectFreshSessionCookies` in `background.js`). Reload the
+  extension and refresh video tabs after changing it.
+- Debug builds panic with `Duplicate a11y node id` when repeated labels share
+  an implicit id. Give labels inside repeated download cards explicit per-item
+  `ElementId`s.
+
 ## Known parity gaps (safe to work on next)
 
 Tray + taskbar progress, native folder picker, full locale routing for visible

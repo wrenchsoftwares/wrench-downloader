@@ -632,39 +632,53 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
+// Read the logged-in session at send time, directly from Chrome's cookie
+// store. yt-dlp's --cookies-from-browser cannot decrypt Chrome's app-bound
+// cookies while the browser is running; the extension can, so it forwards a
+// fresh snapshot for both youtube.com and google.com (the auth cookies live
+// on google.com). Never log cookie values - only the count.
+async function collectFreshSessionCookies(payload) {
+  if (!chrome.cookies || !chrome.cookies.getAll) return;
+  const targets = [...new Set([
+    payload.url,
+    payload.pageUrl || payload.referrer,
+    "https://www.youtube.com/robots.txt",
+    "https://www.google.com/"
+  ].filter(u => typeof u === "string" && /^https?:\/\//i.test(u)))];
+  const allCookies = [];
+  for (const url of targets) {
+    try {
+      const found = await chrome.cookies.getAll({ url });
+      if (found) allCookies.push(...found);
+    } catch (e) {}
+  }
+  // Domain queries catch cookies that are not served by the URL lookups
+  // (for example .google.com auth cookies on a youtube.com page).
+  for (const domain of [".youtube.com", ".google.com"]) {
+    try {
+      const found = await chrome.cookies.getAll({ domain });
+      if (found) allCookies.push(...found);
+    } catch (e) {}
+  }
+  const uniqueCookies = new Map();
+  for (const c of allCookies) {
+    const key = `${c.domain || ""}|${c.path || "/"}|${c.name || ""}`;
+    uniqueCookies.set(key, c);
+  }
+  if (uniqueCookies.size === 0) return;
+  payload.cookies = Array.from(uniqueCookies.values()).slice(0, 100).map(c => ({
+    name: c.name || "",
+    value: c.value || "",
+    domain: (c.domain || "").replace(/^\./, ""),
+    path: c.path || "/",
+    secure: !!c.secure,
+    expiry: c.expirationDate ? Math.floor(c.expirationDate) : 0
+  }));
+  console.debug("[wrench] attached", payload.cookies.length, "fresh session cookies");
+}
+
 async function sendToDesktopApp(payload, tabId) {
-  // Hand the app the live browser session: cookie-DB export (yt-dlp
-  // --cookies-from-browser) fails while Chrome runs with a locked profile,
-  // but the extension can read its own tabs' cookies directly - including
-  // HttpOnly ones - so age/logged-in gates open exactly like they do for
-  // browser-attached downloaders. Best-effort: older installs without the
-  // "cookies" permission simply send none.
-  try {
-    const cookieUrls = [...new Set([payload.url, payload.pageUrl || payload.referrer].filter(u =>
-      typeof u === "string" && /^https?:\/\//i.test(u)))];
-    if (cookieUrls.length && chrome.cookies && chrome.cookies.getAll) {
-      const allCookies = [];
-      for (const cookieUrl of cookieUrls) {
-        const raw = await chrome.cookies.getAll({ url: cookieUrl });
-        if (raw) allCookies.push(...raw);
-      }
-      const uniqueCookies = new Map();
-      for (const c of allCookies) {
-        const key = `${c.domain || ""}|${c.path || "/"}|${c.name || ""}`;
-        uniqueCookies.set(key, c);
-      }
-      if (uniqueCookies.size > 0) {
-        payload.cookies = Array.from(uniqueCookies.values()).slice(0, 100).map(c => ({
-          name: c.name || "",
-          value: c.value || "",
-          domain: (c.domain || "").replace(/^\./, ""),
-          path: c.path || "/",
-          secure: !!c.secure,
-          expiry: c.expirationDate ? Math.floor(c.expirationDate) : 0
-        }));
-      }
-    }
-  } catch (e) {}
+  await collectFreshSessionCookies(payload);
 
   // Browser-minted attestation for the playing tab (see harvestPot).
   try {

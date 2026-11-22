@@ -51,7 +51,12 @@ pub fn classify(url: &str, quality: &str) -> UrlKind {
     let Ok(u) = Url::parse(url) else { return UrlKind::Direct };
     let path = u.path().to_ascii_lowercase();
     let name = path.rsplit('/').next().unwrap_or("");
-    if name.is_empty() || [".html", ".htm", ".php", ".asp", ".aspx"].iter().any(|e| name.ends_with(e)) {
+    // No filename extension (e.g. /watch?v=...) or an HTML-like page means
+    // this is a video page, not a direct file. Route it to yt-dlp.
+    if name.is_empty()
+        || !name.contains('.')
+        || [".html", ".htm", ".php", ".asp", ".aspx"].iter().any(|e| name.ends_with(e))
+    {
         return UrlKind::Page;
     }
     UrlKind::Direct
@@ -101,7 +106,7 @@ pub fn signed_link_expired(url: &str) -> bool {
 
 pub fn quality_selector(quality: &str) -> String {
     match quality.trim().to_ascii_lowercase().as_str() {
-        "" | "best" | "auto" => "bv*+ba/b".into(),
+        "" | "best" | "auto" => "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b".into(),
         "audio" => "bestaudio/best".into(),
         other => {
             let h: i32 = other.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap_or(1080);

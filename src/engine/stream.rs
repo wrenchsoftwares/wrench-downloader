@@ -52,7 +52,7 @@ fn tools() -> (String, String, String, Option<String>) {
     ]);
     let ytdlp = util::tool_path("yt-dlp", &[]);
     let ffmpeg = util::tool_path("ffmpeg", &[]);
-    let js = ["node", "deno"].into_iter().find(|name| {
+    let js = ["deno", "node"].into_iter().find(|name| {
         std::process::Command::new(name).arg("--version")
             .stdout(Stdio::null()).stderr(Stdio::null()).status()
             .map(|s| s.success()).unwrap_or(false)
@@ -146,12 +146,17 @@ fn common_args(
         a.push(format!("{}K", settings.maximum_download_rate_kbps));
     }
     a.extend(["--buffer-size".into(), "64K".into(), "--http-chunk-size".into(), "10M".into(),
-        "--throttled-rate".into(), "100K".into(), "--impersonate".into(), "chrome".into()]);
+        "--throttled-rate".into(), "100K".into()]);
     if let Some(js) = js { a.extend(["--js-runtimes".into(), js.to_string()]); }
+    // Required for YouTube's JS challenge solver; without it Deno runs but
+    // the solver is skipped and age/logged-in formats disappear.
+    a.extend(["--remote-components".into(), "ejs:github".into()]);
     if item.quality == "audio" {
         a.extend(["-x".into(), "--audio-format".into(), "mp3".into()]);
     } else {
-        a.extend(["-f".into(), classify::quality_selector(&item.quality), "--remux-video".into(), "mp4".into()]);
+        a.extend(["-f".into(), classify::quality_selector(&item.quality),
+            "--remux-video".into(), "mp4".into(),
+            "--merge-output-format".into(), "mp4".into()]);
     }
     let referer = if !item.referrer.is_empty() { &item.referrer } else { &item.page_url };
     if !referer.is_empty() { a.extend(["--referer".into(), referer.clone()]); }
@@ -177,10 +182,27 @@ fn parse_ytdlp_progress(line: &str) -> Option<(f64, String)> {
     Some((p, speed))
 }
 
+fn is_real_media(path: &Path) -> bool {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    if !matches!(ext.as_str(), "mp4" | "mkv" | "webm" | "mov" | "m4v" | "mp3" | "m4a" | "aac" | "flac" | "wav" | "opus") {
+        return false;
+    }
+    match std::fs::File::open(path) {
+        Ok(mut f) => {
+            use std::io::Read;
+            let mut head = [0u8; 16];
+            if f.read(&mut head).unwrap_or(0) < 4 { return false; }
+            let text = String::from_utf8_lossy(&head).to_ascii_lowercase();
+            !text.contains("<!doctype") && !text.contains("<html")
+        }
+        Err(_) => false,
+    }
+}
+
 fn find_finished_file(parts: &Path, title: &str) -> Option<PathBuf> {
     let candidates: Vec<PathBuf> = std::fs::read_dir(parts).ok()?
         .flatten().map(|e| e.path())
-        .filter(|p| p.is_file() && !util::is_transient_file(p))
+        .filter(|p| p.is_file() && !util::is_transient_file(p) && is_real_media(p))
         .collect();
     let wanted = title.to_ascii_lowercase();
     candidates.iter().find(|p| {
@@ -195,7 +217,7 @@ fn move_finished_media(parts: &Path, settings: &Settings, item: &DownloadItem) -
     std::fs::create_dir_all(&folder)?;
     let mut last = String::new();
     for entry in walk_files(parts) {
-        if util::is_transient_file(&entry) { continue; }
+        if util::is_transient_file(&entry) || !is_real_media(&entry) { continue; }
         let name = entry.file_name().and_then(|n| n.to_str()).unwrap_or("download");
         let dest = super::move_file_robust(&entry, &folder, name)?;
         last = dest.to_string_lossy().into_owned();

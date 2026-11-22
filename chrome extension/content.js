@@ -1822,7 +1822,7 @@
       sendAudioUrl = "";
       sendSabr = false;
       sendItag = 0;
-      if (!sendQuality || /^\d+$/.test(sendQuality) === false) sendQuality = "best";
+      if (!sendQuality || /^\d{3,4}p?$/i.test(sendQuality) === false) sendQuality = "best";
     }
 
     const payload = {

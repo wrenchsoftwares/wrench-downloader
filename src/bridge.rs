@@ -169,8 +169,9 @@ async fn download(
 ) -> Response {
     let prompt = payload.prompt.unwrap_or(true);
     crate::paths::log_line(&format!(
-        "bridge download: url_host={} cookies={} segments={}",
+        "bridge download: url_host={} quality={} cookies={} segments={}",
         url::Url::parse(&payload.url).ok().and_then(|u| u.host_str().map(str::to_string)).unwrap_or_default(),
+        payload.quality.clone(),
         payload.cookies.as_ref().map(|c| c.len()).unwrap_or(0),
         payload.segments.as_ref().map(|s| s.len()).unwrap_or(0),
     ));

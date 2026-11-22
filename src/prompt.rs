@@ -4,7 +4,6 @@ use crate::engine::UiEvent;
 use crate::model::{DownloadItem, DownloadStatus};
 use crate::paths;
 use crate::ui::AppRuntime;
-use gpui::prelude::FluentBuilder;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputState};
@@ -19,7 +18,6 @@ pub struct PromptView {
     folder_input: Entity<InputState>,
     playlist: bool,
     later: bool,
-    quality: String,
 }
 
 impl PromptView {
@@ -31,13 +29,7 @@ impl PromptView {
     ) -> Self {
         let playlist = item.download_playlist;
         let later = item.wait_for_queue_start;
-        let raw = item.quality.trim().to_ascii_lowercase().replace('p', "");
-        let quality = if ["best", "audio", "2160", "1440", "1080", "720", "480", "360"].contains(&raw.as_str()) {
-            if raw == "best" || raw == "audio" { raw } else { format!("{}p", raw) }
-        } else {
-            "best".to_string()
-        };
-        Self { runtime, item, title_input, folder_input, playlist, later, quality }
+        Self { runtime, item, title_input, folder_input, playlist, later }
     }
 
     fn start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -47,7 +39,6 @@ impl PromptView {
         if !title.is_empty() { item.title = title; }
         if std::path::Path::new(&folder).is_dir() { item.target_folder = folder; }
         item.download_playlist = self.playlist;
-        item.quality = self.quality.clone();
         item.wait_for_queue_start = self.later;
         item.scheduled_at = None;
         item.queue_name = "Main queue".into();
@@ -89,20 +80,6 @@ impl Render for PromptView {
             .child(Label::new("URL").text_sm())
             .child(div().max_h(px(90.)).p_2().rounded_md().bg(theme.input_background())
                 .child(Label::new(url).text_sm().text_color(theme.muted_foreground)))
-            .child(Label::new("Quality (yt-dlp resolves it from the page)").text_sm())
-            .child({
-                let mut row = div().flex().flex_row().gap_1();
-                for q in ["best", "2160p", "1440p", "1080p", "720p", "480p", "360p", "audio"] {
-                    let selected = self.quality == q;
-                    row = row.child(Button::new(format!("quality-{}", q)).label(q)
-                        .when(selected, |b| b.primary())
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.quality = q.to_string();
-                            cx.notify();
-                        })));
-                }
-                row
-            })
             .child(Checkbox::new("prompt-playlist").label("Download the full playlist")
                 .checked(self.playlist)
                 .on_change(cx.listener(|this, v: &bool, _, cx| { this.playlist = *v; cx.notify(); })))
@@ -121,10 +98,10 @@ impl Render for PromptView {
 }
 
 pub fn open_prompt_window(runtime: AppRuntime, item: DownloadItem, cx: &mut App) -> anyhow::Result<()> {
-    let bounds = WindowBounds::Windowed(Bounds {
-        origin: Point { x: px(280.0), y: px(180.0) },
-        size: Size { width: px(620.0), height: px(560.0) },
-    });
+    let bounds = WindowBounds::centered(
+        Size { width: px(560.0), height: px(480.0) },
+        cx,
+    );
     let options = WindowOptions {
         window_bounds: Some(bounds),
         focus: true,

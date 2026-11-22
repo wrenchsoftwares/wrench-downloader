@@ -47,6 +47,7 @@ Name: "arabic"; MessagesFile: "compiler:Languages\Arabic.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
+Name: "startup"; Description: "Start Wrench Downloader with Windows (minimized to tray)"; GroupDescription: "Windows integration:"
 
 [Files]
 Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -56,6 +57,8 @@ Name: "{autoprograms}\Wrench Downloader"; Filename: "{app}\{#MyAppExe}"
 Name: "{autodesktop}\Wrench Downloader"; Filename: "{app}\{#MyAppExe}"; Tasks: desktopicon
 
 [Registry]
+; Optional Start-with-Windows entry; the app starts hidden with its tray icon.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "WrenchDownloader"; ValueData: """{app}\{#MyAppExe}"" --background"; Tasks: startup; Flags: uninsdeletevalue
 ; Magnet-link ownership (magnet-button clicks open Wrench Downloader).
 Root: HKCR; Subkey: "magnet"; ValueType: string; ValueName: ""; ValueData: "URL:Magnet Protocol"; Flags: uninsdeletekey
 Root: HKCR; Subkey: "magnet"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""

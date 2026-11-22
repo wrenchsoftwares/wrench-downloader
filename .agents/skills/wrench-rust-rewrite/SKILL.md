@@ -174,8 +174,21 @@ Dev smoke test with portable data (keeps `%LOCALAPPDATA%` untouched):
   an implicit id. Give labels inside repeated download cards explicit per-item
   `ElementId`s.
 
+## Tray / startup (release builds)
+
+- `platform::start_tray` is compiled only in release (`#[cfg(not(debug_assertions))]`).
+  Debug builds have no tray and close exits directly.
+- Tray uses raw Win32 FFI in a background thread: Shell_NotifyIconW, a hidden
+  helper window, a WM_CLOSE subclass on the main window (close hides it instead
+  of quitting), and a menu with Open app / Settings / Exit.
+- `UiEvent::TraySettings` and `UiEvent::TrayExit` bridge tray actions to the UI;
+  the main event loop handles `TrayExit` with `cx.quit()`.
+- `--background` / `/background` starts with `WindowOptions.show = false`,
+  `focus = false`; the installer can add the HKCU Run entry with that flag.
+- Verified: sending WM_CLOSE leaves the process alive with the window hidden;
+  `--background` starts with zero visible windows and the bridge still up.
+
 ## Known parity gaps (safe to work on next)
 
-Tray + taskbar progress, native folder picker, full locale routing for visible
-strings, DNS pinning, POT attestation helper, extension auto-staging, separate
-OS windows for prompt/settings/about.
+Taskbar progress, native folder picker, full locale routing for visible
+strings, DNS pinning, POT attestation helper, extension auto-staging.

@@ -30,6 +30,8 @@ pub enum UiEvent {
         name: String,
         files: Vec<(String, u64)>,
     },
+    TraySettings,
+    TrayExit,
 }
 
 #[derive(Debug)]

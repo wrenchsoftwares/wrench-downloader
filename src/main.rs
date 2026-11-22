@@ -52,6 +52,9 @@ fn main() -> anyhow::Result<()> {
     platform::register_magnet_protocol();
     platform::start_clipboard_monitor(ui_tx.clone(), settings.clone());
 
+    // Windows "Start with Windows" launches with --background: start hidden.
+    let background = std::env::args().any(|a| a == "--background" || a == "/background");
+
     let app_runtime = ui::AppRuntime {
         store,
         engine,
@@ -71,6 +74,8 @@ fn main() -> anyhow::Result<()> {
                     origin: Point { x: px(80.0), y: px(80.0) },
                     size: Size { width: px(1280.0), height: px(800.0) },
                 })),
+                focus: !background,
+                show: !background,
                 ..Default::default()
             },
             cx,
@@ -85,6 +90,10 @@ fn main() -> anyhow::Result<()> {
                 let mut ui_rx = ui_rx;
                 cx.spawn(async move |app| {
                     while let Some(event) = ui_rx.recv().await {
+                        if matches!(event, UiEvent::TrayExit) {
+                            let _ = app.update(|cx| cx.quit());
+                            continue;
+                        }
                         let weak = weak.clone();
                         let event = event.clone();
                         let _ = app.update(|cx| {
@@ -99,6 +108,10 @@ fn main() -> anyhow::Result<()> {
             },
         )
         .expect("failed to open main window");
+
+        // Release builds minimize to tray on close and expose a tray menu.
+        #[cfg(not(debug_assertions))]
+        platform::start_tray(ui_tx.clone());
     });
 
     Ok(())

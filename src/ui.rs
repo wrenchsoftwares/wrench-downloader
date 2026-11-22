@@ -107,6 +107,15 @@ impl AppView {
                 }
                 cx.notify();
             }
+            UiEvent::TrayExit => {
+                // Handled by the main event loop (calls cx.quit()).
+            }
+            UiEvent::TraySettings => {
+                self.settings_draft = self.runtime.settings.lock().clone();
+                self.settings_open = true;
+                self.settings_dirty = true;
+                cx.notify();
+            }
             UiEvent::TorrentFiles { id, name, files } => {
                 self.torrent_picker = Some(TorrentPickerState {
                     id, name,

@@ -100,6 +100,17 @@ Dev smoke test with portable data (keeps `%LOCALAPPDATA%` untouched):
 - Progress caps at 99 until finalize; partial `.part` bytes are kept on cancellation.
 - Credentials are scrubbed from `history.json` snapshots on save and on load.
 
+## Prompt flow
+
+- The `prompt: true` bridge path must keep the **whole `DownloadItem`** in the
+  prompt state and only add it to the store when Start is clicked. Adding it
+  early makes the queue pump start it before confirmation; not adding it at all
+  makes Start silently fail because `store.find(id)` returns `None`.
+- Honour "Download later": add the item with `wait_for_queue_start = true` but
+  do not send `EngineCommand::Start`.
+- `paths::log_line("prompt shown ...")` / `"prompt start clicked ..."` are
+  useful for verifying this flow when the UI cannot be inspected directly.
+
 ## yt-dlp path — verified fixes
 
 - Prefer **Deno** over Node for `--js-runtimes`; always pass

@@ -21,6 +21,7 @@ pub struct AppRuntime {
 }
 
 struct PromptState {
+    item: DownloadItem,
     id: String,
     title: String,
     url: String,
@@ -112,7 +113,9 @@ impl AppView {
             UiEvent::BridgeDownload { item, prompt } => {
                 let should_prompt = prompt && self.runtime.settings.lock().show_download_dialog;
                 if should_prompt {
+                    crate::paths::log_line(&format!("prompt shown for {}", item.id));
                     self.prompt = Some(PromptState {
+                        item: item.clone(),
                         id: item.id.clone(),
                         title: item.title.clone(),
                         url: if item.page_url == item.url && !item.page_url.is_empty() { "Waiting for fresh stream capture...".into() } else { item.url.clone() },
@@ -167,19 +170,24 @@ impl AppView {
         let title = self.prompt_title.read(cx).value().trim().to_string();
         let folder = self.prompt_folder.read(cx).value().trim().to_string();
         let id = prompt.id.clone();
-        if let Some(item) = self.runtime.store.find(&id) {
-            {
-                let mut g = item.lock();
-                if !title.is_empty() { g.title = title; }
-                if std::path::Path::new(&folder).is_dir() { g.target_folder = folder; }
-                g.download_playlist = prompt.playlist;
-                g.wait_for_queue_start = prompt.later;
-                g.scheduled_at = None;
-                g.queue_name = "Main queue".into();
-            }
+        crate::paths::log_line(&format!("prompt start clicked for {}", id));
+        let later = prompt.later;
+        let mut item = prompt.item;
+        if !title.is_empty() { item.title = title; }
+        if std::path::Path::new(&folder).is_dir() { item.target_folder = folder; }
+        item.download_playlist = prompt.playlist;
+        item.wait_for_queue_start = later;
+        item.scheduled_at = None;
+        item.queue_name = "Main queue".into();
+        item.status = DownloadStatus::Queued;
+        item.status_text = if later { "Saved for later in Main queue".into() } else { "Waiting in queue".into() };
+        self.runtime.store.add(item, true);
+        if !later {
             self.runtime.engine.start(&id);
+            self.status = self.tr("main.started");
+        } else {
+            self.status = "Saved for later in Main queue".into();
         }
-        self.status = self.tr("main.started");
         model::save_history(&self.snapshot_items());
         let _ = window;
         cx.notify();

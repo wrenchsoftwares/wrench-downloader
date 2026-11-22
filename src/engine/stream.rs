@@ -10,7 +10,7 @@ use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedSender;
 
 const FRESH_CAPTURE_MARKERS: &[&str] = &[
@@ -85,6 +85,85 @@ pub(crate) async fn run_process(
         },
     };
     Ok(output)
+}
+
+/// Like `run_process`, but streams stdout line-by-line so the UI shows the
+/// current yt-dlp phase instead of freezing on "Extracting stream information"
+/// until the process exits.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_ytdlp_streaming(
+    program: &str,
+    args: &[String],
+    timeout: Duration,
+    token: Option<&tokio_util::sync::CancellationToken>,
+    store: &DownloadStore,
+    ui: &UnboundedSender<UiEvent>,
+    id: &str,
+) -> anyhow::Result<std::process::Output> {
+    let mut cmd = tokio::process::Command::new(program);
+    cmd.args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .creation_flags(0x08000000);
+    let mut child = cmd.spawn()?;
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
+
+    let collected = Arc::new(parking_lot::Mutex::new(Vec::<String>::new()));
+    let lines = collected.clone();
+    let ui_tx = ui.clone();
+    let store = store.clone();
+    let id = id.to_string();
+    let stdout_task = tokio::spawn(async move {
+        use tokio::io::AsyncBufReadExt as _;
+        let mut reader = tokio::io::BufReader::new(stdout).lines();
+        while let Ok(Some(line)) = reader.next_line().await {
+            lines.lock().push(line.clone());
+            let lower = line.to_ascii_lowercase();
+            let phase = if lower.contains("solving js challenges") {
+                Some("Solving JavaScript challenge...")
+            } else if lower.contains("extracting url") {
+                Some("Resolving page URL...")
+            } else if lower.contains("downloading webpage") || lower.contains("player api") {
+                Some("Reading player formats...")
+            } else if lower.contains("downloading manifest") || lower.contains("metadata") {
+                Some("Reading stream metadata...")
+            } else {
+                None
+            };
+            if let Some(phase) = phase {
+                update(&store, &ui_tx, &id, |i| i.status_text = phase.into());
+            }
+        }
+    });
+
+    let stderr_task = tokio::spawn(async move {
+        use tokio::io::AsyncReadExt as _;
+        let mut text = String::new();
+        let _ = tokio::io::BufReader::new(stderr).read_to_string(&mut text).await;
+        text
+    });
+
+    let status = match token {
+        Some(t) => tokio::select! {
+            _ = t.cancelled() => anyhow::bail!("cancelled"),
+            r = child.wait() => r?,
+        },
+        None => match tokio::time::timeout(timeout, child.wait()).await {
+            Ok(r) => r?,
+            Err(_) => anyhow::bail!("process timed out"),
+        },
+    };
+    let _ = stdout_task.await;
+    let stderr_text = stderr_task.await.unwrap_or_default();
+    let stdout_text = collected.lock().join("\n");
+    Ok(std::process::Output {
+        status,
+        stdout: stdout_text.into_bytes(),
+        stderr: stderr_text.into_bytes(),
+    })
 }
 
 fn safe_cookie_field(s: &str, trim: bool) -> Option<String> {
@@ -180,12 +259,12 @@ fn common_args(
         a.push("--limit-rate".into());
         a.push(format!("{}K", settings.maximum_download_rate_kbps));
     }
-    // Speed settings from the working script.
+    // Measured on this machine: aria2c and -N 16 are much slower here
+    // (aria2c ~30s, -N 16 gets HTTP 403). Plain yt-dlp defaults finish in ~4s.
+    // Keep the switch for the fallback path, but default to plain downloads.
     if aria_active {
         a.extend(["--downloader".into(), "aria2c".into(), "--downloader-args".into(),
             "aria2c:-x 16 -s 16 -k 1M --file-allocation=none".into()]);
-    } else {
-        a.extend(["-N".into(), "16".into(), "--http-chunk-size".into(), "10M".into()]);
     }
     if !ffmpeg.is_empty() && ffmpeg != "ffmpeg" {
         a.extend(["--ffmpeg-location".into(), ffmpeg.to_string()]);
@@ -291,8 +370,8 @@ pub async fn ytdlp_download(
     };
     let parts = parts_subdir(&item, &title);
     let template = output_template(&item, &parts, &title);
-    let aria_available = Path::new(&aria).exists() || std::process::Command::new(&aria).arg("--version").stdout(Stdio::null()).stderr(Stdio::null()).status().map(|s| s.success()).unwrap_or(false);
-    let mut aria_active = aria_available && !classify::is_manifest_url(&item.url);
+    // Plain yt-dlp is measurably fastest/reliable here; aria2c is opt-in only.
+    let mut aria_active = false;
     let mut common = common_args(&item, &settings, &ffmpeg, aria_active);
     let jar = write_cookie_jar(&item, "wd_session");
     let challenge_jar = if item.page_url.to_ascii_lowercase().contains("challenge") { write_cookie_jar(&item, "wd_challenge") } else { None };
@@ -351,7 +430,10 @@ pub async fn ytdlp_download(
             if idx > 0 { i.progress = 0.0; }
         });
 
-        let output = run_process(&ytdlp, &args, Duration::from_secs(3600), Some(&token), None).await;
+        let started = Instant::now();
+        crate::paths::log_line(&format!("yt-dlp start attempt {} cookies={}", idx + 1, has_jar));
+        let output = run_ytdlp_streaming(&ytdlp, &args, Duration::from_secs(3600), Some(&token), store, ui, id).await;
+        crate::paths::log_line(&format!("yt-dlp attempt {} finished in {:.1}s", idx + 1, started.elapsed().as_secs_f64()));
         let output = match output {
             Ok(o) => o,
             Err(e) => { last_error = e.to_string(); idx += 1; continue; }

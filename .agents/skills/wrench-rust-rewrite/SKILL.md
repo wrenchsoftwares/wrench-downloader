@@ -140,9 +140,15 @@ Dev smoke test with portable data (keeps `%LOCALAPPDATA%` untouched):
   runtime and breaks the EJS solver.
 - Numeric quality selector from that script:
   `bv*[height<=H][ext=mp4]+ba[ext=m4a]/b[height<=H][ext=mp4]/bv*[height<=H]+ba/b[height<=H]`.
-- Use aria2c with `aria2c:-x 16 -s 16 -k 1M --file-allocation=none` when
-  available, otherwise `-N 16 --http-chunk-size 10M`. Pass `--ffmpeg-location`
-  when ffmpeg is not just `ffmpeg` on PATH.
+- **Measured on this machine:** plain yt-dlp defaults finish a small video in
+  ~4s; aria2c took ~30s and `-N 16` triggered HTTP 403. Default to plain
+  downloads; aria2c is opt-in only. Pass `--ffmpeg-location` when ffmpeg is not
+  just `ffmpeg` on PATH.
+- Stream yt-dlp stdout line-by-line (`run_ytdlp_streaming`) instead of
+  `wait_with_output` so the UI shows phases (Solving JS challenge, Reading
+  player formats, ...) rather than freezing on "Extracting stream information".
+- `paths::log_line` records `yt-dlp start ...` / `yt-dlp attempt N finished in
+  Xs` for timing diagnosis.
 - Do **not** pass `--impersonate chrome` unless the installed yt-dlp supports
   impersonation targets — the current install aborts with
   `Impersonate target "chrome" is not available`.

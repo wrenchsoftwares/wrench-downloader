@@ -4,7 +4,8 @@
 // capturing the exact stream URL, request headers (Referer, User-Agent), and content lengths.
 
 const mediaByTab = new Map();
-const requestHeadersMap = new Map(); // url -> { referer, userAgent }
+const requestHeadersMap = new Map(); // recent media URL -> request context (kept in memory only)
+const REQUEST_CONTEXT_MAX_AGE_MS = 2 * 60 * 1000;
 const contentDispositionMap = new Map(); // url -> server filename
 const APP_SERVER_URL = "http://127.0.0.1:45732/api/download";
 // Latest browser-minted PO token per tab, harvested from videoplayback URLs
@@ -34,6 +35,39 @@ function freshPot(tabId) {
   return "";
 }
 
+function pruneRequestHeaders() {
+  const now = Date.now();
+  for (const [url, entry] of requestHeadersMap) {
+    if (!entry || now - entry.time > REQUEST_CONTEXT_MAX_AGE_MS) requestHeadersMap.delete(url);
+  }
+}
+
+function getRequestHeaders(url) {
+  pruneRequestHeaders();
+  const entry = requestHeadersMap.get(url);
+  return entry && Date.now() - entry.time <= REQUEST_CONTEXT_MAX_AGE_MS ? entry : null;
+}
+
+function pruneMediaContext(tabId) {
+  const items = mediaByTab.get(tabId);
+  if (!items) return;
+  const now = Date.now();
+  for (const item of items) {
+    if (item && now - (item.time || 0) > REQUEST_CONTEXT_MAX_AGE_MS) {
+      delete item.streamHeaders;
+    }
+  }
+}
+
+function isPotentialMediaRequest(details) {
+  if (!details || !details.url) return false;
+  if (details.type === "media") return true;
+  const value = String(details.url).toLowerCase();
+  return /\.(m3u8|mpd|mp4|m4v|webm|mkv|mov|avi|m4a|mp3|aac|ogg|opus|wav|m4s|ts)(?:$|[?#])/.test(value) ||
+    /\/manifest(?:\/|$)|playlist|hls_|dash|transcodings?|qualities/.test(value) ||
+    /[?&](?:itag|mime|quality|format)=/.test(value);
+}
+
 // SABR segment sets: tabId -> itag -> [{ u, range, len, time }].
 // u = exact segment URL the browser fetched (signed, session-authorized).
 // range = "bytes=a-b" (Range request header or range= query) or "".
@@ -53,7 +87,7 @@ function recordSabrSegment(tabId, url, details) {
     if (rq) range = "bytes=" + rq[1];
     if (!range) {
       try {
-        const rec = requestHeadersMap.get(url);
+        const rec = getRequestHeaders(url);
         if (rec && rec.range) range = rec.range;
       } catch (e) {}
     }
@@ -149,6 +183,8 @@ function parseContentDispositionFilename(headerVal) {
 chrome.webRequest.onBeforeSendHeaders.addListener(
   (details) => {
     if (!details.url || details.tabId < 0) return;
+    if (!isPotentialMediaRequest(details)) return;
+    pruneRequestHeaders();
     let referer = "";
     let userAgent = "";
     const streamHeaders = {};
@@ -173,7 +209,7 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
     }
 
     if (referer || userAgent || rangeHeader || Object.keys(streamHeaders).length > 0) {
-      requestHeadersMap.set(details.url, { referer, userAgent, streamHeaders, range: rangeHeader, time: Date.now() });
+      requestHeadersMap.set(details.url, { tabId: details.tabId, referer, userAgent, streamHeaders, range: rangeHeader, time: Date.now() });
       // Keep map small
       if (requestHeadersMap.size > 200) {
         const firstKey = requestHeadersMap.keys().next().value;
@@ -269,7 +305,7 @@ chrome.webRequest.onHeadersReceived.addListener(
       (itagHeight > 0 && !itagAudio);
 
     if (isHls || isDash || isVideo || isAudioTrack) {
-      const headers = requestHeadersMap.get(url) || {};
+      const headers = getRequestHeaders(url) || {};
       const type = isAudioTrack ? "audio" : isHls ? "hls" : isDash ? "dash" : "video";
 
       addDetectedMedia(details.tabId, {
@@ -295,6 +331,7 @@ chrome.webRequest.onHeadersReceived.addListener(
 chrome.webRequest.onBeforeRequest.addListener(
   (details) => {
     if (!details.url || details.tabId < 0) return;
+    if (!isPotentialMediaRequest(details)) return;
     const url = details.url;
 
     harvestPot(details.tabId, url);
@@ -378,9 +415,10 @@ function guessTitle(url) {
 // Matched structurally by playlist path markers, never by site name.
 function isManifestUrl(u) {
   const s = String(u || "").toLowerCase();
-  return s.includes(".m3u8") || s.includes(".mpd") ||
+  if (/\.(svg|png|jpe?g|gif|webp|ico)(?:[?#]|$)/i.test(s)) return false;
+  return /\.(m3u8|mpd)(?:[?#]|$)/i.test(s) ||
     s.includes("hls_playlist") || s.includes("hls_variant") ||
-    s.includes("manifest.googlevideo.com") || /\/manifest\//.test(s);
+    /\/manifest\/(?:hls|dash)(?:\/|[?#]|$)/.test(s);
 }
 
 function manifestType(u) {
@@ -472,6 +510,9 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   mediaByTab.delete(tabId);
   potByTab.delete(tabId);
   sabrByTab.delete(tabId);
+  for (const [url, entry] of requestHeadersMap) {
+    if (entry && entry.tabId === tabId) requestHeadersMap.delete(url);
+  }
 });
 
 // A top-level navigation starts a new page context. Drop the old page's
@@ -480,6 +521,9 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status === "loading") {
     mediaByTab.delete(tabId);
     potByTab.delete(tabId);
+    for (const [url, entry] of requestHeadersMap) {
+      if (entry && entry.tabId === tabId) requestHeadersMap.delete(url);
+    }
   }
 });
 
@@ -590,8 +634,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "GET_MEDIA") {
     // Only this tab's streams: leaking another tab's media here produced
     // dropdown rows whose URLs don't match the current video (rows that fail).
+    pruneMediaContext(tabId);
     const items = (tabId && mediaByTab.get(tabId)) || [];
-    sendResponse({ media: items, sabr: getSabrSets(tabId || -1) });
+    // Return the current browser-minted attestation only to the requesting
+    // tab's live content script. It remains in memory and is handed directly
+    // to the download request; it is never persisted with media/history.
+    sendResponse({ media: items, sabr: getSabrSets(tabId || -1), poToken: freshPot(tabId || -1) });
     return true;
   }
 
@@ -614,9 +662,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const sendTabId = sender.tab ? sender.tab.id : message.tabId;
     try {
       if (sendTabId !== undefined && sendTabId !== null && sendTabId >= 0 && message.payload) {
-        const captured = (mediaByTab.get(sendTabId) || []).find(m => m.url === message.payload.url);
-        const headers = captured && captured.streamHeaders;
-        if (headers && Object.keys(headers).length > 0) message.payload.streamHeaders = headers;
+        pruneMediaContext(sendTabId);
+        const media = mediaByTab.get(sendTabId) || [];
+        const video = media.find(m => m.url === message.payload.url);
+        const audio = message.payload.audioUrl ? media.find(m => m.url === message.payload.audioUrl) : null;
+        const fresh = entry => entry && Date.now() - (entry.time || 0) <= REQUEST_CONTEXT_MAX_AGE_MS;
+        const videoHeaders = (fresh(video) && video.streamHeaders) || (getRequestHeaders(message.payload.url) || {}).streamHeaders;
+        const audioHeaders = (fresh(audio) && audio.streamHeaders) ||
+          (message.payload.audioUrl && (getRequestHeaders(message.payload.audioUrl) || {}).streamHeaders);
+        if (videoHeaders && Object.keys(videoHeaders).length > 0) message.payload.streamHeaders = videoHeaders;
+        if (audioHeaders && Object.keys(audioHeaders).length > 0) message.payload.audioStreamHeaders = audioHeaders;
       }
       if (sendTabId !== undefined && sendTabId !== null && sendTabId >= 0 &&
           message.payload && !message.payload.poToken) {
@@ -640,7 +695,7 @@ async function sendToDesktopApp(payload, tabId) {
   // browser-attached downloaders. Best-effort: older installs without the
   // "cookies" permission simply send none.
   try {
-    const cookieUrls = [...new Set([payload.url, payload.pageUrl || payload.referrer].filter(u =>
+    const cookieUrls = [...new Set([payload.url, payload.audioUrl, payload.pageUrl || payload.referrer].filter(u =>
       typeof u === "string" && /^https?:\/\//i.test(u)))];
     if (cookieUrls.length && chrome.cookies && chrome.cookies.getAll) {
       const allCookies = [];

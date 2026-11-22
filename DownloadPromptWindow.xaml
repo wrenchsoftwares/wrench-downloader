@@ -17,7 +17,7 @@
                 </StackPanel>
 
                 <TextBox x:Name="TitleBox" Header="File Name" PlaceholderText="File Name" />
-                <TextBox x:Name="UrlBox" Header="URL" IsReadOnly="True" />
+                <TextBox x:Name="UrlBox" Header="URL" IsReadOnly="True" TextWrapping="Wrap" AcceptsReturn="True" MaxHeight="140" ScrollViewer.VerticalScrollBarVisibility="Auto" />
                 <CheckBox x:Name="PlaylistCheckBox" Content="Download the full YouTube playlist" Visibility="Collapsed" />
                 
                 <Grid ColumnSpacing="8">

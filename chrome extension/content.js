@@ -8,11 +8,35 @@
   const pageCapturedStreams = [];
   let currentOpenMenu = null;
 
+  // Reloading the extension invalidates content scripts already running in
+  // open tabs. Chrome may leave their DOM listeners alive, so every later
+  // runtime call must tolerate the context disappearing mid-page.
+  function getLiveRuntime() {
+    try {
+      const runtime = typeof chrome !== "undefined" ? chrome.runtime : null;
+      return runtime && runtime.id ? runtime : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function sendRuntimeMessage(message) {
+    const runtime = getLiveRuntime();
+    if (!runtime || typeof runtime.sendMessage !== "function") return Promise.resolve(null);
+    try {
+      return Promise.resolve(runtime.sendMessage(message)).catch(() => null);
+    } catch (e) {
+      return Promise.resolve(null);
+    }
+  }
+
   // Inject in-page sniffer into the main world to intercept fetch/XHR
   function injectSniffer() {
     try {
+      const runtime = getLiveRuntime();
+      if (!runtime) return;
       const script = document.createElement("script");
-      script.src = chrome.runtime.getURL("injected.js");
+      script.src = runtime.getURL("injected.js");
       (document.head || document.documentElement).appendChild(script);
       script.onload = () => script.remove();
     } catch (e) {}
@@ -57,12 +81,10 @@
         pageCapturedStreams.unshift(item);
       }
 
-      if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
-        chrome.runtime.sendMessage({
+      void sendRuntimeMessage({
           action: "REPORT_MEDIA",
           media: item
-        }).catch(() => {});
-      }
+      });
 
   // If dropdown is currently open, refresh it live (debounced: HLS players
   // emit network events constantly, and each one used to rebuild the menu)
@@ -123,9 +145,7 @@
         targetVideo._wrenchCapturedStreams.unshift(item);
       }
     }
-    if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
-      chrome.runtime.sendMessage({ action: "REPORT_MEDIA", media: item }).catch(() => {});
-    }
+    void sendRuntimeMessage({ action: "REPORT_MEDIA", media: item });
   }
 
   window.addEventListener("__WRENCH_PLAYER_RESPONSE__", (e) => {
@@ -141,7 +161,7 @@
         pagePlayerAudioUrl = "";
         pageCapturedStreams.splice(0);
         if (activeVideo) activeVideo._wrenchCapturedStreams = [];
-        chrome.runtime.sendMessage({ action: "CLEAR_MEDIA" }).catch(() => {});
+        void sendRuntimeMessage({ action: "CLEAR_MEDIA" });
       }
       // Fresh manifests first: one authorized URL carries ALL renditions.
       ["hls", "dash"].forEach(kind => {
@@ -209,7 +229,7 @@
   async function getBackgroundState() {
     let bgMedia = [], sabrSets = [];
     try {
-      const response = await chrome.runtime.sendMessage({ action: "GET_MEDIA" }).catch(() => null);
+      const response = await sendRuntimeMessage({ action: "GET_MEDIA" });
       if (response && response.media) bgMedia = response.media;
       if (response && response.sabr) sabrSets = response.sabr;
     } catch (e) {}
@@ -561,6 +581,7 @@
   function isPlayableStreamUrl(u) {
     if (!u || typeof u !== "string") return false;
     if (!/^https?:\/\//i.test(u)) return false;
+    if (/\.(svg|png|jpe?g|gif|webp|ico)(?:[?#]|$)/i.test(u)) return false;
     // SABR redirectors (?aitags=) play only inside the page handshake.
     if (/[?&]aitags=/i.test(u)) return false;
     if (/bytestart|byteend|range=|\.m4s($|\?)|\.ts($|\?)|init\.mp4|init\.m4s|\/segment|\/frag|beacon|analytics|preview|thumb|poster|sprite|storyboard/i.test(u)) return false;
@@ -582,7 +603,8 @@
     if (isAudioTrack(u) || isVideoTrackOnly(u)) return false;
     // Media playlists are never masters, even on manifest hosts.
     if (/hls_variant/i.test(u)) return false;
-    return /master|playlist|manifest|hls_playlist|\/pl\/[^\/]+\.m3u8/i.test(u) || (u.includes(".m3u8") && u.includes("tag="));
+    return /hls_playlist|\/manifest\/(?:hls|dash)(?:\/|[?#]|$)|\/pl\/[^\/]+\.m3u8/i.test(u) ||
+      (u.includes(".m3u8") && u.includes("tag="));
   }
 
   function isRenditionLike(u) {
@@ -606,10 +628,8 @@
   async function resolveConcreteStreamUrl() {
     const pool = [];
     try {
-      if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
-        const r = await chrome.runtime.sendMessage({ action: "GET_MEDIA" }).catch(() => null);
-        ((r && r.media) || []).forEach(m => { if (m && m.url) pool.push(m.url); });
-      }
+      const r = await sendRuntimeMessage({ action: "GET_MEDIA" });
+      ((r && r.media) || []).forEach(m => { if (m && m.url) pool.push(m.url); });
     } catch (e) {}
     try {
       pageCapturedStreams.forEach(s => { if (s && s.url) pool.push(s.url); });
@@ -767,6 +787,7 @@
       if (found.length > 40 || !url || typeof url !== "string") return;
       url = url.trim().replace(/\\u0026/g, "&").replace(/\\\//g, "/").replace(/&amp;/g, "&");
       if (!/^https?:\/\//i.test(url) || url.length > 1500) return;
+      if (/\.(svg|png|jpe?g|gif|webp|ico)(?:[?#]|$)/i.test(url)) return;
       // SABR redirectors are handshake-only, never downloadable.
       if (/[?&]aitags=/i.test(url)) return;
       // Extension-less playlist endpoints (player configs carry complete
@@ -939,6 +960,27 @@
         });
       }
     });
+    // The background service worker can be suspended between media requests
+    // and the user's click. Resource Timing remains available in the live page
+    // for resources the browser fetched, so recover concrete media URLs here
+    // as a final browser-capture source (never classify arbitrary "playlist"
+    // paths; collectPerfMediaUrls only admits media extensions/manifest markers).
+    collectPerfMediaUrls().forEach(url => {
+      if (!url || uniqueMap.has(url) || !isPlayableStreamUrl(url)) return;
+      const type = /\.mpd(?:[?#]|$)/i.test(url) ? "dash"
+        : (/\.m3u8(?:[?#]|$)/i.test(url) || /hls_playlist|hls_variant|manifest\.googlevideo\.com|\/manifest\//i.test(url)) ? "hls"
+          : /\.(mp4|webm|mkv|m4v|mov|avi)(?:[?#]|$)/i.test(url) ? "video" : "";
+      if (!type) return;
+      uniqueMap.set(url, {
+        url,
+        title,
+        type,
+        referer: postPageUrl,
+        userAgent: navigator.userAgent,
+        time: Date.now(),
+        performanceCapture: true
+      });
+    });
     const isManifestEntry = (m) =>
       m.type === "hls" || m.type === "dash" ||
       /hls_playlist|hls_variant|manifest\.googlevideo\.com|\/manifest\/|\.m3u8(\?|#|$)|\.mpd(\?|#|$)/i.test(m.url || "") ||
@@ -1028,10 +1070,12 @@
           pageUrl: postPageUrl,
           referrer: m.referer || postPageUrl,
           userAgent: m.userAgent || navigator.userAgent,
+          streamHeaders: m.streamHeaders || {},
           badge: label.toUpperCase(),
           sub: `Direct stream • Res: (${w}x${h})`,
           audioUrl: (audioForVideo && audioForVideo.url && audioForVideo.url !== m.url) ? audioForVideo.url : "",
-          audioReferrer: (audioForVideo && audioForVideo.referer) || m.referer || postPageUrl
+          audioReferrer: (audioForVideo && audioForVideo.referer) || m.referer || postPageUrl,
+          audioStreamHeaders: (audioForVideo && audioForVideo.streamHeaders) || {}
         });
       });
 
@@ -1529,12 +1573,10 @@
           video._wrenchCapturedStreams.unshift(item);
         }
 
-        if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
-          chrome.runtime.sendMessage({
+        void sendRuntimeMessage({
             action: "REPORT_MEDIA",
             media: item
-          }).catch(() => {});
-        }
+        });
       }
     });
   }
@@ -1615,11 +1657,9 @@
       let items = [];
       let bgMedia = [];
       let sabrSets = [];
-      if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
-        const response = await chrome.runtime.sendMessage({ action: "GET_MEDIA" }).catch(() => null);
-        if (response && response.media) bgMedia = response.media;
-        if (response && response.sabr) sabrSets = response.sabr;
-      }
+      const response = await sendRuntimeMessage({ action: "GET_MEDIA" });
+      if (response && response.media) bgMedia = response.media;
+      if (response && response.sabr) sabrSets = response.sabr;
       items = await getGenericVideoItems(video, bgMedia, sabrSets);
       if (menu._populateGeneration !== generation) return;
 
@@ -1638,12 +1678,12 @@
         const empty = document.createElement("div");
         empty.className = "wrench-dropdown-empty";
         const emptyTitle = document.createElement("span");
-        emptyTitle.textContent = "No video stream detected yet.";
+        emptyTitle.textContent = "No downloadable video stream detected yet.";
         empty.appendChild(emptyTitle);
         empty.appendChild(document.createElement("br"));
         const emptyHint = document.createElement("small");
         emptyHint.setAttribute("style", "color:#aaa;");
-        emptyHint.textContent = "Start playing the video to capture stream directly.";
+        emptyHint.textContent = "Start playback; if access is age restricted, sign in and complete the age check first. Protected streams cannot be downloaded.";
         empty.appendChild(emptyHint);
         menu.appendChild(empty);
       } else {
@@ -1721,7 +1761,7 @@
     return false;
   }
 
-  function sendDownloadToApp(item) {
+  async function sendDownloadToApp(item) {
     if (!item.url || item.url.startsWith("blob:")) {
       alert("Stream URL not ready yet. Please play the video for 1 second first!");
       return;
@@ -1734,23 +1774,79 @@
     if (item.url === item.pageUrl || !isConcreteStreamUrl(item.url)) {
       const wantAudio = (item.quality || "").toLowerCase() === "audio";
       let replacement = "";
-      if (activeVideo && activeVideo.currentSrc && isConcreteStreamUrl(activeVideo.currentSrc)) {
+      let replacementEntry = null;
+      // The menu can stay open while playback continues. Refresh the tab's
+      // short-lived capture pool at the final handoff so a page fallback row
+      // can use the stream the browser just requested instead of making the
+      // desktop app resolve the gated page again.
+      let liveMedia = [];
+      let capturedPoToken = "";
+      const targetHeight = parseInt(item.quality || "", 10) || 0;
+      const wantMatchingCapture = (media) => {
+        const candidates = [
+          ...media,
+          ...pageCapturedStreams,
+          ...(activeVideo && Array.isArray(activeVideo._wrenchCapturedStreams) ? activeVideo._wrenchCapturedStreams : [])
+        ];
+        if (wantAudio) return candidates.some(isAudioCapture);
+        if (targetHeight > 0 && candidates.some(s => getItagHeight(s.url) === targetHeight && !isAudioCapture(s))) return true;
+        return candidates.some(s => isMasterLike(s.url) && !isAudioCapture(s));
+      };
+      try {
+        // Browser capture is asynchronous relative to the click. Poll briefly
+        // for the matching rendition while the signed-in tab continues to
+        // play, instead of immediately falling back to a page-level resolve.
+        // This does not mint credentials or bypass access checks.
+        for (let attempt = 0; attempt < 10; attempt++) {
+          const latest = await sendRuntimeMessage({ action: "GET_MEDIA" });
+          if (latest && Array.isArray(latest.media)) liveMedia = latest.media;
+          if (latest && typeof latest.poToken === "string") capturedPoToken = latest.poToken;
+          if (wantMatchingCapture(liveMedia)) break;
+          if (attempt < 9) await new Promise(resolve => setTimeout(resolve, 350));
+        }
+      } catch (e) {}
+      if (!item.poToken && capturedPoToken) item.poToken = capturedPoToken;
+      const pool = [
+        ...(activeVideo && Array.isArray(activeVideo._wrenchCapturedStreams) ? activeVideo._wrenchCapturedStreams : []),
+        ...pageCapturedStreams,
+        ...liveMedia
+      ].filter((s, index, all) => s && s.url && all.findIndex(x => x && x.url === s.url) === index)
+        .filter(s => !/^(blob:|data:|chrome-extension:\/\/)/i.test(s.url))
+        .filter(s => !isExpiredStreamUrl(s.url))
+        .filter(s => !/[?&](range|bytestart|byteend|sabr|aitags)=/i.test(s.url || ""))
+        .sort((a, b) => (b.time || 0) - (a.time || 0));
+      if (!wantAudio && activeVideo && activeVideo.currentSrc && isConcreteStreamUrl(activeVideo.currentSrc) &&
+          (!targetHeight || getItagHeight(activeVideo.currentSrc) === targetHeight || isMasterLike(activeVideo.currentSrc))) {
         replacement = activeVideo.currentSrc;
-      } else if (activeVideo && activeVideo._wrenchCapturedStreams && activeVideo._wrenchCapturedStreams.length > 0) {
+      } else if (pool.length > 0) {
         // IDM-freshness: newest capture first; expired links and
         // per-fragment junk (ranges, SABR handshakes) are never candidates.
         // No blind pool[0] fallback: a wrong-type URL is worse than none.
-        const pool = activeVideo._wrenchCapturedStreams
-          .filter(s => s && s.url && !/^(blob:|data:|chrome-extension:\/\/)/i.test(s.url))
-          .filter(s => !isExpiredStreamUrl(s.url))
-          .filter(s => !/[?&](range|bytestart|byteend|sabr|aitags)=/i.test(s.url || ""))
-          .sort((a, b) => (b.time || 0) - (a.time || 0));
-        const match = pool.find(s => s.quality === item.quality && (wantAudio || !isAudioCapture(s))) ||
-                      (wantAudio ? pool.find(s => isAudioCapture(s)) : pool.find(s => !isAudioCapture(s)));
-        if (match && match.url) replacement = match.url;
+        const match = pool.find(s => (s.quality === item.quality ||
+          (targetHeight > 0 && getItagHeight(s.url) === targetHeight)) && (wantAudio || !isAudioCapture(s))) ||
+          (wantAudio ? pool.find(s => isAudioCapture(s)) : pool.find(s => !isAudioCapture(s) && isMasterLike(s.url)));
+        if (match && match.url) {
+          replacement = match.url;
+          replacementEntry = match;
+        }
       }
       // Never swap a good URL for a worse one: only concrete replacements.
-      if (replacement && isConcreteStreamUrl(replacement)) item.url = replacement;
+      if (replacement && isConcreteStreamUrl(replacement)) {
+        item.url = replacement;
+        if (replacementEntry) {
+          item.referrer = replacementEntry.referer || item.referrer;
+          item.userAgent = replacementEntry.userAgent || item.userAgent;
+          item.streamHeaders = replacementEntry.streamHeaders || item.streamHeaders;
+          if (!wantAudio && !item.audioUrl) {
+            const audio = pool.find(s => isAudioCapture(s));
+            if (audio && audio.url !== replacementEntry.url) {
+              item.audioUrl = audio.url;
+              item.audioReferrer = audio.referer || item.referrer;
+              item.audioStreamHeaders = audio.streamHeaders || {};
+            }
+          }
+        }
+      }
     }
 
     const payload = {
@@ -1763,6 +1859,9 @@
       userAgent: item.userAgent || navigator.userAgent,
       audioUrl: item.audioUrl || "",
       audioReferrer: item.audioReferrer || item.referrer || "",
+      streamHeaders: item.streamHeaders || {},
+      audioStreamHeaders: item.audioStreamHeaders || {},
+      poToken: item.poToken || "",
       sabr: !!item.sabr,
       itag: item.itag || 0,
       expectedBytes: item.expectedBytes || 0,
@@ -1773,25 +1872,20 @@
       prompt: true
     };
 
-    if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
-      chrome.runtime.sendMessage({
+    const runtime = getLiveRuntime();
+    if (runtime) {
+      void sendRuntimeMessage({
         action: "SEND_TO_APP",
         payload: payload
-      }, (res) => {
-        if (chrome.runtime.lastError || !res || !res.success) {
+      }).then((res) => {
+        if (res && !res.success) {
           alert("Wrench Downloader app is not running or bridge failed.\nPlease start Wrench Downloader!");
-        } else {
+        } else if (res && res.success) {
           console.log("Download sent to Wrench Downloader:", res);
         }
       });
     } else {
-      fetch("http://127.0.0.1:45732/api/download", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      }).catch((e) => {
-        alert("Failed to communicate with Wrench Downloader: " + e.message);
-      });
+      alert("Wrench Companion was reloaded. Refresh this tab before downloading so stream capture can reconnect.");
     }
   }
 
@@ -1800,8 +1894,8 @@
   // before document/bubble listeners, and the send is silent (no alerts).
   function sendMagnetToApp(magnet) {
     try {
-      if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
-        chrome.runtime.sendMessage({
+      if (getLiveRuntime()) {
+        void sendRuntimeMessage({
           action: "SEND_TO_APP",
           payload: {
             url: magnet,
@@ -1813,7 +1907,7 @@
             userAgent: navigator.userAgent,
             prompt: true
           }
-        }, () => { try { void chrome.runtime.lastError; } catch (e) {} });
+        });
       }
     } catch (e) {}
   }

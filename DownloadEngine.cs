@@ -78,6 +78,148 @@ public class DownloadEngine
         }
     }
 
+    /// <summary>
+    /// Resolve a page fallback to its actual media URL before showing the
+    /// browser-download confirmation. The URL stays only on the live item;
+    /// history snapshotting already removes signed/session-bound URLs.
+    /// </summary>
+    public static async Task<bool> ResolvePromptStreamUrlAsync(
+        DownloadItem item, CancellationToken cancellationToken = default)
+    {
+        if (item == null || item.DownloadPlaylist || string.IsNullOrWhiteSpace(item.Url) ||
+            string.IsNullOrWhiteSpace(item.PageUrl) ||
+            !item.Url.Equals(item.PageUrl, StringComparison.OrdinalIgnoreCase) ||
+            !IsStreamingSite(item))
+            return false;
+
+        string ytdlpPath = FindYtDlpPath();
+        string? cookieFile = null;
+        try
+        {
+            cookieFile = ChallengeSolver.WriteCookieJar(item.PageUrl, item.Cookies);
+            var psi = new ProcessStartInfo
+            {
+                FileName = ytdlpPath,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            psi.ArgumentList.Add("--get-url");
+            psi.ArgumentList.Add("--no-warnings");
+            psi.ArgumentList.Add("--no-playlist");
+            psi.ArgumentList.Add("--socket-timeout");
+            psi.ArgumentList.Add("8");
+            psi.ArgumentList.Add("--retries");
+            psi.ArgumentList.Add("0");
+            psi.ArgumentList.Add("--format");
+            psi.ArgumentList.Add(GetYtDlpFormatSelector(item.Quality));
+            psi.ArgumentList.Add("--impersonate");
+            psi.ArgumentList.Add("chrome");
+            string[] jsRuntimeParts = FindJsRuntimeArgs().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (jsRuntimeParts.Length > 1)
+            {
+                psi.ArgumentList.Add(jsRuntimeParts[0]);
+                psi.ArgumentList.Add(jsRuntimeParts[1]);
+            }
+
+            if (!string.IsNullOrWhiteSpace(item.UserAgent))
+            {
+                psi.ArgumentList.Add("--user-agent");
+                psi.ArgumentList.Add(item.UserAgent);
+            }
+            string referer = !string.IsNullOrWhiteSpace(item.Referrer) ? item.Referrer : item.PageUrl;
+            if (!string.IsNullOrWhiteSpace(referer))
+            {
+                psi.ArgumentList.Add("--referer");
+                psi.ArgumentList.Add(referer);
+            }
+            if (!string.IsNullOrWhiteSpace(cookieFile))
+            {
+                psi.ArgumentList.Add("--cookies");
+                psi.ArgumentList.Add(cookieFile);
+            }
+            if (!string.IsNullOrWhiteSpace(item.PoToken) &&
+                (PotProviderHelper.IsYouTubeUrl(item.Url) || PotProviderHelper.IsYouTubeUrl(item.PageUrl)))
+            {
+                string token = Regex.Replace(item.PoToken.Trim(), @"[^A-Za-z0-9\-_]", "");
+                if (!string.IsNullOrEmpty(token))
+                {
+                    psi.ArgumentList.Add("--extractor-args");
+                    psi.ArgumentList.Add($"youtube:po_token=web.gvs+{token}");
+                }
+            }
+            psi.ArgumentList.Add(item.PageUrl);
+
+            using var process = Process.Start(psi);
+            if (process == null) return false;
+
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(12));
+            Task<string> outputTask = process.StandardOutput.ReadToEndAsync(timeout.Token);
+            Task<string> errorTask = process.StandardError.ReadToEndAsync(timeout.Token);
+            try
+            {
+                await process.WaitForExitAsync(timeout.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { }
+                if (cancellationToken.IsCancellationRequested) throw;
+                return false;
+            }
+
+            string output = await outputTask;
+            _ = await errorTask; // Drain stderr without exposing extractor output or signed URLs.
+            if (process.ExitCode != 0) return false;
+
+            var mediaUrls = output
+                .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(line => Uri.TryCreate(line, UriKind.Absolute, out var u) &&
+                    (u.Scheme == Uri.UriSchemeHttp || u.Scheme == Uri.UriSchemeHttps))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (mediaUrls.Count == 0) return false;
+
+            item.Url = mediaUrls[0];
+            if (!string.Equals(item.Quality, "audio", StringComparison.OrdinalIgnoreCase) &&
+                mediaUrls.Count > 1 && string.IsNullOrWhiteSpace(item.AudioUrl))
+                item.AudioUrl = mediaUrls[1];
+            return true;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { return false; }
+        finally
+        {
+            ChallengeSolver.DeleteCookieFile(cookieFile);
+        }
+    }
+
+    private static string FindYtDlpPath()
+    {
+        string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        string pythonYtDlp = Path.Combine(localAppData, @"Programs\Python\Python312\Scripts\yt-dlp.exe");
+        return File.Exists(pythonYtDlp) ? pythonYtDlp : "yt-dlp";
+    }
+
+    private static string GetYtDlpFormatSelector(string? quality)
+    {
+        if (string.Equals(quality, "audio", StringComparison.OrdinalIgnoreCase))
+            return "bestaudio/best";
+        if (string.IsNullOrWhiteSpace(quality) ||
+            quality.Equals("best", StringComparison.OrdinalIgnoreCase) ||
+            quality.Equals("auto", StringComparison.OrdinalIgnoreCase))
+            return "bv*+ba/b";
+
+        int targetHeight = 1080;
+        var match = Regex.Match(quality, @"\d+");
+        if (match.Success && int.TryParse(match.Value, out int parsedHeight) && parsedHeight > 0)
+            targetHeight = parsedHeight;
+        int maxWidth = (int)Math.Round(targetHeight * 16.0 / 9.0);
+        return $"bv*[height<={targetHeight}]+ba/b[height<={targetHeight}]/" +
+               $"bv*[height<={maxWidth}][width<={targetHeight}]+ba/b[height<={maxWidth}][width<={targetHeight}]/bv*+ba/b";
+    }
+
     private static string GetDownloadCategory(DownloadItem item)
     {
         if (item.DownloadPlaylist) return "Playlists";
@@ -343,25 +485,16 @@ public class DownloadEngine
         item.StatusText = AppLocalization.Get("download.connectingStream");
         item.SpeedText = AppLocalization.Get("download.resolving");
 
-        var streamHeaders = item.StreamHeaders ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        bool hasCapturedBrowserHeaders = streamHeaders.Count > 0;
-        // When Chrome supplied the exact request headers, use its Cookie
-        // header (if any). Page cookies are for youtube.com and may not match
-        // the googlevideo request that IDM successfully captured.
-        string cookieHeader = hasCapturedBrowserHeaders
-            ? streamHeaders.FirstOrDefault(h => h.Key.Equals("Cookie", StringComparison.OrdinalIgnoreCase)).Value ?? ""
-            : BuildCookieHeader(item.Cookies, videoUrl);
-        // googlevideo authorizes the login via SAPISIDHASH, never cookies -
-        // attach it whenever the live session has SAPISID (IDM-equivalent).
-        var (sapisidAuthz, sapisidOrigin) = SapisidHashAuth(item.Cookies, videoUrl);
-        if (!string.IsNullOrEmpty(sapisidAuthz))
-            LogDiag(item, "SAPISIDHASH session auth attached for googlevideo");
         string referer = !string.IsNullOrWhiteSpace(item.Referrer) ? item.Referrer
             : !string.IsNullOrWhiteSpace(item.PageUrl) ? item.PageUrl
-            : "https://www.youtube.com/";
+            : "";
         string userAgent = !string.IsNullOrWhiteSpace(item.UserAgent)
             ? item.UserAgent
             : "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
+
+        var streamHeaders = item.StreamHeaders ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, string> HeadersFor(string url, bool audio) =>
+            audio && item.AudioStreamHeaders.Count > 0 ? item.AudioStreamHeaders : streamHeaders;
 
         // Stream edge hosts sometimes fail on the system resolver (VPN/WARP
         // DNS) while the browser resolves them fine. Resolve up front: system
@@ -423,8 +556,17 @@ public class DownloadEngine
         using HttpClient? ownedClient = pinHandler != null ? new HttpClient(pinHandler) : null;
         HttpClient dlClient = ownedClient ?? _httpClient;
 
-        async Task<bool> TryDownloadGoogleVideoWithAria2cAsync(string url, string destPath, string label, CancellationToken ct)
+        async Task<bool> TryDownloadGoogleVideoWithAria2cAsync(
+            string url, string destPath, string label, CancellationToken ct,
+            Dictionary<string, string> requestHeaders, string cookieHeader,
+            string requestReferer, string requestUserAgent, string authz, string authOrigin)
         {
+            // Keep live browser credentials in-process; command-line arguments
+            // can be visible to other local processes while aria2c runs.
+            if (!string.IsNullOrEmpty(cookieHeader) || !string.IsNullOrEmpty(authz) ||
+                requestHeaders.Keys.Any(k => k.Equals("Cookie", StringComparison.OrdinalIgnoreCase) ||
+                    k.Equals("Authorization", StringComparison.OrdinalIgnoreCase)))
+                return false;
             string? aria2cPath;
             try { aria2cPath = Aria2cHelper.FindAria2c(); }
             catch { aria2cPath = null; }
@@ -475,9 +617,9 @@ public class DownloadEngine
                     if (string.IsNullOrWhiteSpace(value) || !emittedHeaders.Add(name)) return;
                     AddArg("--header", $"{name}: {value}");
                 }
-                if (hasCapturedBrowserHeaders)
+                if (requestHeaders.Count > 0)
                 {
-                    foreach (var header in streamHeaders)
+                    foreach (var header in requestHeaders)
                     {
                         if (header.Key.Equals("Range", StringComparison.OrdinalIgnoreCase) ||
                             header.Key.Equals("Host", StringComparison.OrdinalIgnoreCase)) continue;
@@ -486,12 +628,12 @@ public class DownloadEngine
                     }
                 }
                 AddHeader("Cookie", cookieHeader);
-                AddHeader("User-Agent", userAgent);
-                AddHeader("Referer", referer);
-                if (!string.IsNullOrEmpty(sapisidAuthz))
-                    AddHeader("Authorization", sapisidAuthz);
-                if (!string.IsNullOrEmpty(sapisidOrigin))
-                    AddHeader("X-Origin", sapisidOrigin);
+                AddHeader("User-Agent", requestUserAgent);
+                AddHeader("Referer", requestReferer);
+                if (!string.IsNullOrEmpty(authz))
+                    AddHeader("Authorization", authz);
+                if (!string.IsNullOrEmpty(authOrigin))
+                    AddHeader("X-Origin", authOrigin);
                 AddArg("--", url);
 
                 process = Process.Start(psi);
@@ -551,13 +693,28 @@ public class DownloadEngine
 
         async Task<string> DownloadUrlToFileAsync(string url, string destPath, string label, CancellationToken ct)
         {
-            if (await TryDownloadGoogleVideoWithAria2cAsync(url, destPath, label, ct))
+            bool isAudio = label.Equals("audio", StringComparison.OrdinalIgnoreCase);
+            var requestHeaders = HeadersFor(url, isAudio);
+            bool hasCapturedBrowserHeaders = requestHeaders.Count > 0;
+            string cookieHeader = requestHeaders.FirstOrDefault(h =>
+                h.Key.Equals("Cookie", StringComparison.OrdinalIgnoreCase)).Value ?? "";
+            if (string.IsNullOrWhiteSpace(cookieHeader))
+                cookieHeader = BuildCookieHeader(item.Cookies, url);
+            string requestReferer = requestHeaders.FirstOrDefault(h =>
+                h.Key.Equals("Referer", StringComparison.OrdinalIgnoreCase)).Value ??
+                (isAudio && !string.IsNullOrWhiteSpace(item.AudioReferrer) ? item.AudioReferrer : referer);
+            string requestUserAgent = requestHeaders.FirstOrDefault(h =>
+                h.Key.Equals("User-Agent", StringComparison.OrdinalIgnoreCase)).Value ?? userAgent;
+            var (sapisidAuthz, sapisidOrigin) = SapisidHashAuth(item.Cookies, url);
+
+            if (await TryDownloadGoogleVideoWithAria2cAsync(url, destPath, label, ct,
+                requestHeaders, cookieHeader, requestReferer, requestUserAgent, sapisidAuthz, sapisidOrigin))
                 return destPath;
 
             using var req = new HttpRequestMessage(HttpMethod.Get, url);
             if (hasCapturedBrowserHeaders)
             {
-                foreach (var header in streamHeaders)
+                foreach (var header in requestHeaders)
                 {
                     if (header.Key.Equals("Cookie", StringComparison.OrdinalIgnoreCase))
                     {
@@ -572,14 +729,20 @@ public class DownloadEngine
             }
             else
             {
-                req.Headers.TryAddWithoutValidation("User-Agent", userAgent);
-                req.Headers.TryAddWithoutValidation("Referer", referer);
-                req.Headers.TryAddWithoutValidation("Origin", "https://www.youtube.com");
+                req.Headers.TryAddWithoutValidation("User-Agent", requestUserAgent);
+                req.Headers.TryAddWithoutValidation("Referer", requestReferer);
+                string origin = requestHeaders.FirstOrDefault(h => h.Key.Equals("Origin", StringComparison.OrdinalIgnoreCase)).Value ??
+                    (Uri.TryCreate(requestReferer, UriKind.Absolute, out var refererUri) ? refererUri.GetLeftPart(UriPartial.Authority) : "");
+                if (!string.IsNullOrWhiteSpace(origin)) req.Headers.TryAddWithoutValidation("Origin", origin);
                 req.Headers.TryAddWithoutValidation("Accept", "*/*");
                 req.Headers.TryAddWithoutValidation("Accept-Language", "en-US,en;q=0.9");
                 if (!string.IsNullOrEmpty(cookieHeader))
                     req.Headers.TryAddWithoutValidation("Cookie", cookieHeader);
             }
+            if (!req.Headers.Contains("User-Agent")) req.Headers.TryAddWithoutValidation("User-Agent", requestUserAgent);
+            if (!req.Headers.Contains("Referer") && !string.IsNullOrWhiteSpace(requestReferer))
+                req.Headers.TryAddWithoutValidation("Referer", requestReferer);
+            if (!req.Headers.Contains("Accept")) req.Headers.TryAddWithoutValidation("Accept", "*/*");
             if (!req.Headers.Contains("Authorization") && !string.IsNullOrEmpty(sapisidAuthz))
             {
                 req.Headers.TryAddWithoutValidation("Authorization", sapisidAuthz);
@@ -767,10 +930,9 @@ public class DownloadEngine
         item.StatusText = AppLocalization.Get("download.connectingStream");
         item.SpeedText = AppLocalization.Get("download.resolving");
 
-        string cookieHeader = BuildCookieHeader(item.Cookies);
         string referer = !string.IsNullOrWhiteSpace(item.Referrer) ? item.Referrer
             : !string.IsNullOrWhiteSpace(item.PageUrl) ? item.PageUrl
-            : "https://www.youtube.com/";
+            : "";
         string userAgent = !string.IsNullOrWhiteSpace(item.UserAgent)
             ? item.UserAgent
             : "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
@@ -828,16 +990,33 @@ public class DownloadEngine
         long totalDone = 0;
         long grandTotal = item.ExpectedBytes;
 
-        async Task<byte[]> GetBytesAsync(string url, string? range, string label, CancellationToken ct)
+        async Task<byte[]> GetBytesAsync(
+            string url, string? range, string label,
+            Dictionary<string, string> capturedHeaders, string requestReferer, CancellationToken ct)
         {
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(180));
             using var req = new HttpRequestMessage(HttpMethod.Get, url);
-            req.Headers.TryAddWithoutValidation("User-Agent", userAgent);
-            req.Headers.TryAddWithoutValidation("Referer", referer);
-            req.Headers.TryAddWithoutValidation("Origin", "https://www.youtube.com");
-            req.Headers.TryAddWithoutValidation("Accept", "*/*");
-            req.Headers.TryAddWithoutValidation("Accept-Language", "en-US,en;q=0.9");
+            foreach (var header in capturedHeaders)
+            {
+                if (header.Key.Equals("Cookie", StringComparison.OrdinalIgnoreCase) ||
+                    header.Key.Equals("Range", StringComparison.OrdinalIgnoreCase) ||
+                    header.Key.Equals("Host", StringComparison.OrdinalIgnoreCase)) continue;
+                req.Headers.TryAddWithoutValidation(header.Key, header.Value);
+            }
+            if (!req.Headers.Contains("User-Agent")) req.Headers.TryAddWithoutValidation("User-Agent", userAgent);
+            if (!req.Headers.Contains("Referer") && !string.IsNullOrWhiteSpace(requestReferer))
+                req.Headers.TryAddWithoutValidation("Referer", requestReferer);
+            string origin = capturedHeaders.FirstOrDefault(h =>
+                h.Key.Equals("Origin", StringComparison.OrdinalIgnoreCase)).Value ??
+                (Uri.TryCreate(requestReferer, UriKind.Absolute, out var refererUri) ? refererUri.GetLeftPart(UriPartial.Authority) : "");
+            if (!req.Headers.Contains("Origin") && !string.IsNullOrWhiteSpace(origin))
+                req.Headers.TryAddWithoutValidation("Origin", origin);
+            if (!req.Headers.Contains("Accept")) req.Headers.TryAddWithoutValidation("Accept", "*/*");
+            if (!req.Headers.Contains("Accept-Language")) req.Headers.TryAddWithoutValidation("Accept-Language", "en-US,en;q=0.9");
+            string cookieHeader = capturedHeaders.FirstOrDefault(h =>
+                h.Key.Equals("Cookie", StringComparison.OrdinalIgnoreCase)).Value ?? "";
+            if (string.IsNullOrWhiteSpace(cookieHeader)) cookieHeader = BuildCookieHeader(item.Cookies, url);
             if (!string.IsNullOrEmpty(cookieHeader))
                 req.Headers.TryAddWithoutValidation("Cookie", cookieHeader);
             var (sabrSapisidAuthz, sabrSapisidOrigin) = SapisidHashAuth(item.Cookies, url);
@@ -882,12 +1061,13 @@ public class DownloadEngine
         // One track (video or audio): full GET first, else init + ranges.
         async Task<string> BuildTrackAsync(
             string trackPath, string repUrl, string initRange,
-            List<StreamSegment> segs, long expected, string label, CancellationToken ct)
+            List<StreamSegment> segs, long expected, string label,
+            Dictionary<string, string> capturedHeaders, string requestReferer, CancellationToken ct)
         {
             // (1) Full-file attempt on the representative URL.
             try
             {
-                byte[] full = await GetBytesAsync(repUrl, null, label + " whole", ct);
+                byte[] full = await GetBytesAsync(repUrl, null, label + " whole", capturedHeaders, requestReferer, ct);
                 if (full.Length >= 256 * 1024 && (expected <= 0 || full.Length >= expected * 9 / 10))
                 {
                     await File.WriteAllBytesAsync(trackPath, full, ct);
@@ -896,8 +1076,10 @@ public class DownloadEngine
                 }
                 LogDiag(item, $"{label} whole-file short ({full.Length} vs {expected}), segment replay");
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
+                if (RequiresFreshCapture(ex)) throw;
                 LogDiag(item, $"{label} whole-file failed ({ex.Message}), segment replay");
             }
             // (2) Segment replay in byte order with overlap skipping.
@@ -917,7 +1099,7 @@ public class DownloadEngine
             {
                 try
                 {
-                    byte[] init = await GetBytesAsync(repUrl, $"bytes={initStart}-{initEnd?.ToString() ?? ""}", label + " init", ct);
+                    byte[] init = await GetBytesAsync(repUrl, $"bytes={initStart}-{initEnd?.ToString() ?? ""}", label + " init", capturedHeaders, requestReferer, ct);
                     await file.WriteAsync(init, 0, init.Length, ct);
                     written += init.Length;
                     coveredUntil = initEnd ?? (initStart + init.Length - 1);
@@ -925,8 +1107,10 @@ public class DownloadEngine
                     if (initEnd == null) coveredUntil = initStart + init.Length - 1;
                     LogDiag(item, $"{label} init bytes={init.Length}");
                 }
+                catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
                 {
+                    if (RequiresFreshCapture(ex)) throw;
                     LogDiag(item, $"{label} init fetch failed ({ex.Message}), relying on captured segments");
                 }
             }
@@ -938,10 +1122,12 @@ public class DownloadEngine
                 byte[] data;
                 try
                 {
-                    data = await GetBytesAsync(seg.Url, seg.Range, label + " part", ct);
+                    data = await GetBytesAsync(seg.Url, seg.Range, label + " part", capturedHeaders, requestReferer, ct);
                 }
-                catch
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
                 {
+                    if (RequiresFreshCapture(ex)) throw;
                     // One dead segment must not kill the file; the player
                     // tolerates small gaps far better than a failed download.
                     skipped++;
@@ -978,7 +1164,8 @@ public class DownloadEngine
         string outTmp = Path.Combine(partsSubdir, safeTitle + "." + ext);
 
         string repUrl = !string.IsNullOrWhiteSpace(item.Url) ? item.Url : segments[0].Url;
-        await BuildTrackAsync(videoTmp, repUrl, item.InitRange, segments, item.ExpectedBytes, "video", cancellationToken);
+        await BuildTrackAsync(videoTmp, repUrl, item.InitRange, segments, item.ExpectedBytes, "video",
+            item.StreamHeaders, referer, cancellationToken);
 
         bool hasAudioTrack = false;
         if (audioSegments.Count > 0)
@@ -986,11 +1173,14 @@ public class DownloadEngine
             string audioRep = !string.IsNullOrWhiteSpace(item.AudioUrl) ? item.AudioUrl : audioSegments[0].Url;
             try
             {
-                await BuildTrackAsync(audioTmp, audioRep, item.AudioInitRange, audioSegments, 0, "audio", cancellationToken);
+                await BuildTrackAsync(audioTmp, audioRep, item.AudioInitRange, audioSegments, 0, "audio",
+                    item.AudioStreamHeaders.Count > 0 ? item.AudioStreamHeaders : item.StreamHeaders,
+                    string.IsNullOrWhiteSpace(item.AudioReferrer) ? referer : item.AudioReferrer, cancellationToken);
                 hasAudioTrack = true;
             }
             catch (Exception ex)
             {
+                if (RequiresFreshCapture(ex)) throw;
                 LogDiag(item, $"audio track failed, continuing video-only: {ex.Message}");
                 try { if (File.Exists(audioTmp)) File.Delete(audioTmp); } catch { }
             }
@@ -1189,6 +1379,8 @@ public class DownloadEngine
             catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
+                if (RequiresFreshCapture(ex))
+                    throw new InvalidOperationException(AppLocalization.Get("download.replayRequired"), ex);
                 LogDiag(item, $"SABR reassembly failed, falling back to yt-dlp: {ex.Message}");
                 item.Progress = 0;
                 item.SavePath = "";
@@ -1218,6 +1410,8 @@ public class DownloadEngine
             catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
+                if (RequiresFreshCapture(ex))
+                    throw new InvalidOperationException(AppLocalization.Get("download.replayRequired"), ex);
                 LogDiag(item, $"extension-resolved direct failed, falling back to yt-dlp: {ex.Message}");
                 string em = ex.Message ?? "";
                 if (em.Contains("does not resolve", StringComparison.OrdinalIgnoreCase) ||
@@ -1235,10 +1429,7 @@ public class DownloadEngine
         }
 
         // Locate yt-dlp.exe
-        string ytdlpPath = "yt-dlp";
-        string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        string pythonYtDlp = Path.Combine(localAppData, @"Programs\Python\Python312\Scripts\yt-dlp.exe");
-        if (File.Exists(pythonYtDlp)) ytdlpPath = pythonYtDlp;
+        string ytdlpPath = FindYtDlpPath();
         LogDiag(item, $"start quality={item.Quality} ytdlp={ytdlpPath} version={YtDlpVersion(ytdlpPath)}");
 
         // Multi-connection plain-HTTP downloads (IDM-style). HLS/DASH stay on
@@ -1312,26 +1503,9 @@ public class DownloadEngine
         {
             argsBuilder.Append("-x --audio-format mp3 ");
         }
-        else if (string.IsNullOrWhiteSpace(item.Quality) ||
-                 item.Quality.Equals("best", StringComparison.OrdinalIgnoreCase) ||
-                 item.Quality.Equals("auto", StringComparison.OrdinalIgnoreCase))
-        {
-            // "Best available" from the extension: must include video track! Never fall back to standalone audio.
-            argsBuilder.Append("-f \"bv*+ba/b\" ");
-            // Automatically remux to mp4
-            argsBuilder.Append("--remux-video mp4 ");
-        }
         else
         {
-            int targetDim = 1080;
-            var matchHeight = Regex.Match(item.Quality ?? "", @"\d+");
-            if (matchHeight.Success && int.TryParse(matchHeight.Value, out int parsedHeight) && parsedHeight > 0)
-            {
-                targetDim = parsedHeight;
-            }
-            int verticalLength = (int)Math.Round(targetDim * 16.0 / 9.0);
-            // Landscape first (height cap), portrait fallback (height+width cap), never fall back to audio-only.
-            argsBuilder.Append($"-f \"bv*[height<={targetDim}]+ba/b[height<={targetDim}]/bv*[height<={verticalLength}][width<={targetDim}]+ba/b[height<={verticalLength}][width<={targetDim}]/bv*+ba/b\" ");
+            argsBuilder.Append($"-f \"{GetYtDlpFormatSelector(item.Quality)}\" ");
             // Automatically remux to mp4
             argsBuilder.Append("--remux-video mp4 ");
         }
@@ -1693,7 +1867,7 @@ public class DownloadEngine
                 }
             };
 
-            LogDiag(item, $"attempt url={attemptUrl} cookies={(attempt.CookieArgs != null ? attempt.CookieArgs.Trim() : "none")}");
+            LogDiag(item, $"attempt urlHost={SafeHostOf(attemptUrl)} auth={(attempt.CookieArgs != null ? "yes" : "no")}");
             proc.Start();
             proc.BeginOutputReadLine();
             proc.BeginErrorReadLine();
@@ -1816,9 +1990,11 @@ public class DownloadEngine
                     item.Status = DownloadStatus.Failed;
                     item.EtaText = "--";
                     LogDiag(item, $"terminal failure: {lastError}");
-                    item.StatusText = !string.IsNullOrWhiteSpace(lastError) && lastError.Length > 90
-                        ? lastError[..90] + "..."
-                        : lastError;
+                    item.StatusText = HasBrowserSessionButNoResolvedStream(item, lastError)
+                        ? AppLocalization.Get("download.browserStreamNotCaptured")
+                        : !string.IsNullOrWhiteSpace(lastError) && lastError.Length > 90
+                            ? lastError[..90] + "..."
+                            : lastError;
 #if DEBUG
                     string stuckShort = lastError ?? "";
                     if (stuckShort.Length > 200) stuckShort = stuckShort[..200];
@@ -1854,7 +2030,7 @@ public class DownloadEngine
                             LogDiag(item, "gated content detected, retrying with extension session");
                             nextArgs = sessionCookieArgs;
                         }
-                        else
+                        else if (!hasSessionJar)
                         {
                             string? nextBrowser = NextAuthBrowser(attempt.CookieArgs, attemptUrl, authBrowsersTried);
                             if (nextBrowser != null)
@@ -1875,11 +2051,12 @@ public class DownloadEngine
                         }
                         else
                         {
-                            // Player clients exhausted with the extension jar:
-                            // fall through to a full browser-profile export
-                            // (chrome -> edge -> brave), which carries complete
-                            // cookie attributes the hand-built jar may lack.
-                            string? nextBrowser = NextAuthBrowser(attempt.CookieArgs, attemptUrl, authBrowsersTried);
+                            // The extension jar came from the active browser
+                            // tab. Re-reading the locked profile cannot improve
+                            // it; report a capture hint if page extraction fails.
+                            string? nextBrowser = hasSessionJar
+                                ? null
+                                : NextAuthBrowser(attempt.CookieArgs, attemptUrl, authBrowsersTried);
                             if (nextBrowser != null)
                             {
                                 authBrowsersTried.Add($"{attemptUrl}|{nextBrowser}");
@@ -1928,7 +2105,9 @@ public class DownloadEngine
                         item.SpeedText = AppLocalization.Get("download.resolving");
                         continue;
                     }
-                    string? profileBrowser = NextAuthBrowser(attempt.CookieArgs, attemptUrl, authBrowsersTried);
+                    string? profileBrowser = hasSessionJar
+                        ? null
+                        : NextAuthBrowser(attempt.CookieArgs, attemptUrl, authBrowsersTried);
                     if (profileBrowser != null)
                     {
                         authBrowsersTried.Add($"{attemptUrl}|{profileBrowser}");
@@ -1990,7 +2169,9 @@ public class DownloadEngine
                                     lastError.Contains("unable to download", StringComparison.OrdinalIgnoreCase));
                     item.StatusText = expired
                         ? AppLocalization.Get("download.linkExpired")
-                        : lastError.Length > 90 ? lastError[..90] + "..." : lastError;
+                        : HasBrowserSessionButNoResolvedStream(item, lastError)
+                            ? AppLocalization.Get("download.browserStreamNotCaptured")
+                            : lastError.Length > 90 ? lastError[..90] + "..." : lastError;
                 }
                 else
                 {
@@ -2524,6 +2705,19 @@ public class DownloadEngine
         return dest;
     }
 
+    private static bool RequiresFreshCapture(Exception error)
+    {
+        string message = error.Message ?? "";
+        return message.Contains("does not resolve", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("link expired", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("session expired", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("replay the video", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("expired (410", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("range not satisfiable", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("rejected (401", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("rejected (403", StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>
     /// Move every finished file from a Parts subfolder to the downloads
     /// folder (preserving playlist subfolders), with collision numbering.
@@ -2693,6 +2887,11 @@ public class DownloadEngine
         !string.IsNullOrWhiteSpace(lastError) &&
         Regex.IsMatch(lastError, @"sign in|log ?in|login|confirm your age|age.restrict|private video|pass cookies|cookies required|account.*required|not a bot|bot check|po_?token|needs? to be reloaded|reload the page", RegexOptions.IgnoreCase);
 
+    private static bool HasBrowserSessionButNoResolvedStream(DownloadItem item, string lastError) =>
+        item.Cookies?.Count > 0 &&
+        (IsGatedError(lastError) || Regex.IsMatch(lastError,
+            @"requested format is not available|no formats found", RegexOptions.IgnoreCase));
+
     /// <summary>
     /// Next browser session to try for an auth-walled URL (chrome -&gt; edge
     /// -&gt; brave), or null when the chain is exhausted. Each url+browser
@@ -2762,7 +2961,7 @@ public class DownloadEngine
         try
         {
             File.AppendAllText(PortablePaths.StartupLogPath,
-                $"[{DateTime.Now}] [dl:{item.Id[..8]}:{item.Title}] {message}\n");
+                $"[{DateTime.Now}] [dl:{item.Id[..8]}:{item.Title}] {RedactDiagnosticUrls(message)}\n");
         }
         catch { }
     }
@@ -2778,10 +2977,26 @@ public class DownloadEngine
         try
         {
             File.AppendAllText(PortablePaths.StartupLogPath,
-                $"[{DateTime.Now}] [track:{item.Id[..8]}:{item.Title}] {message}\n");
+                $"[{DateTime.Now}] [track:{item.Id[..8]}:{item.Title}] {RedactDiagnosticUrls(message)}\n");
         }
         catch { }
     }
+
+    private static string SafeHostOf(string? value)
+    {
+        try { return new Uri(value ?? "").Host; } catch { return "?"; }
+    }
+
+    private static string RedactDiagnosticUrls(string message) => Regex.Replace(
+        message ?? "", @"https?://[^\s""'<>]+", match =>
+        {
+            try
+            {
+                var uri = new Uri(match.Value);
+                return $"{uri.Scheme}://{uri.Host}/<redacted>";
+            }
+            catch { return "<url-redacted>"; }
+        }, RegexOptions.IgnoreCase);
 
 #if DEBUG
     private static string HostOf(string? url)
@@ -2792,7 +3007,7 @@ public class DownloadEngine
     private static void TrackStart(DownloadItem item)
     {
         Track(item, $"START site={HostOf(item.PageUrl)} " +
-            $"page={item.PageUrl} url={item.Url} quality={item.Quality} " +
+            $"pageHost={HostOf(item.PageUrl)} urlHost={HostOf(item.Url)} quality={item.Quality} " +
             $"cookies={(item.Cookies?.Count ?? 0)} pot={(!string.IsNullOrEmpty(item.PoToken) ? "yes" : "no")} " +
             $"ref={HostOf(item.Referrer)} " +
             $"ua={(string.IsNullOrEmpty(item.UserAgent) ? "no" : "yes")} " +

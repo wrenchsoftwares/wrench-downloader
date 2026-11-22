@@ -7,13 +7,15 @@
 
   const capturedUrls = new Set();
 
-  // Playlist/manifest URL markers incl. extension-less masters
-  // (manifest.googlevideo.com HLS/DASH endpoints carry no .m3u8/.mpd).
+  // Strong URL markers for manifests. Generic "playlist" and "master"
+  // substrings are too broad: image assets can use those path names. For
+  // extension-less endpoints, response MIME detection below is authoritative.
   function looksLikeManifest(u) {
     if (!u || typeof u !== "string") return false;
-    return u.includes(".m3u8") || u.includes(".mpd") || u.includes("playlist") ||
-      u.includes("master") || u.includes("hls_variant") ||
-      u.includes("manifest.googlevideo.com") || /\/manifest\//i.test(u) ||
+    if (/\.(svg|png|jpe?g|gif|webp|ico)(?:[?#]|$)/i.test(u)) return false;
+    return /\.(m3u8|mpd)(?:[?#]|$)/i.test(u) ||
+      /(?:^|[/._-])hls_(?:playlist|variant)(?:[/?._-]|$)/i.test(u) ||
+      /\/manifest\/(?:hls|dash)(?:\/|[?#]|$)/i.test(u) ||
       isExtensionResolvablePlayback(u);
   }
 
@@ -41,6 +43,7 @@
 
   function notifyStream(url, type, extra) {
     if (!url || typeof url !== "string") return;
+    if (/\.(svg|png|jpe?g|gif|webp|ico)(?:[?#]|$)/i.test(url)) return;
     if (isSabrRedirector(url)) return;
     if (
       (url.includes("/videoplayback") && !isExtensionResolvablePlayback(url)) ||

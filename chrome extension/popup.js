@@ -215,8 +215,9 @@ function renderPageFallback() {
     if (!activeTab) return;
     listEl.innerHTML = `
       <div class="empty">
-        <div>No active downloads or media streams on this tab.</div>
-        <div style="margin-top: 6px; font-size: 11px; color: #6ee7b7;">Browser downloads (ZIP, EXE, ISO, etc.) are automatically captured when you click download links!</div>
+        <div>No downloadable media stream detected yet.</div>
+        <div style="margin-top: 6px; font-size: 11px;">Start playback and reopen this panel. If access is age restricted, sign in and complete YouTube’s age check first.</div>
+        <div style="margin-top: 6px; font-size: 10px; color: #8f9298;">Protected or unsupported streams won’t appear as downloads.</div>
       </div>
     `;
   });

@@ -111,6 +111,11 @@ public class DownloadItem : INotifyPropertyChanged
     /// <summary>Safe browser request headers captured for this exact media
     /// rendition. Used to reproduce the request Chrome already proved works.</summary>
     public Dictionary<string, string> StreamHeaders { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Captured request headers for the separate audio rendition.</summary>
+    public Dictionary<string, string> AudioStreamHeaders { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Set on persisted entries whose short-lived browser session must
+    /// be captured again before they can be retried.</summary>
+    public bool RequiresFreshBrowserCapture { get; set; }
     public string TargetFolder { get; set; } = "";
     public string QueueName { get; set; } = "Main queue";
     public bool DownloadPlaylist { get; set; }
@@ -142,6 +147,134 @@ public class DownloadItem : INotifyPropertyChanged
                 OnPropertyChanged(nameof(AddedText));
             }
         }
+    }
+
+    /// <summary>
+    /// Build a history-only copy without live browser credentials. Signed stream
+    /// URLs are bearer credentials too, so omit them whenever the item carries
+    /// an authenticated or signed browser capture. The in-memory download item
+    /// remains untouched while its current transfer is running.
+    /// </summary>
+    public DownloadItem CreateHistorySnapshot()
+    {
+        var snapshot = (DownloadItem)MemberwiseClone();
+        bool mustRecapture = RequiresFreshBrowserCapture || HasTransientBrowserCredentials() ||
+            ContainsSensitiveStreamUrl(Url) || ContainsSensitiveStreamUrl(AudioUrl) ||
+            ContainsSensitiveStreamUrl(PageUrl) || ContainsSensitiveStreamUrl(Referrer) ||
+            ContainsSensitiveStreamUrl(AudioReferrer) ||
+            (Segments?.Any(s => ContainsSensitiveStreamUrl(s.Url)) ?? false) ||
+            (AudioSegments?.Any(s => ContainsSensitiveStreamUrl(s.Url)) ?? false);
+
+        snapshot.Cookies = null;
+        snapshot.PoToken = "";
+        snapshot.StreamHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        snapshot.AudioStreamHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        if (!mustRecapture) return snapshot;
+
+        snapshot.Url = "";
+        snapshot.AudioUrl = "";
+        snapshot.Segments = null;
+        snapshot.AudioSegments = null;
+        snapshot.Referrer = "";
+        snapshot.AudioReferrer = "";
+        snapshot.UserAgent = "";
+        snapshot.PageUrl = SafePageUrl(PageUrl);
+        snapshot.IsSabr = false;
+        snapshot.RequiresFreshBrowserCapture = Status != DownloadStatus.Completed && !IsTorrent;
+        if (snapshot.RequiresFreshBrowserCapture)
+        {
+            snapshot.Status = DownloadStatus.Paused;
+            snapshot.WaitForQueueStart = false;
+            snapshot.StatusText = AppLocalization.Get("download.replayRequired");
+        }
+        return snapshot;
+    }
+
+    /// <summary>Scrub credentials left by older history files and make any
+    /// incomplete authenticated stream wait for a fresh browser capture.</summary>
+    public void ScrubLoadedHistoryCredentials()
+    {
+        bool mustRecapture = RequiresFreshBrowserCapture || HasTransientBrowserCredentials() ||
+            ContainsSensitiveStreamUrl(Url) || ContainsSensitiveStreamUrl(AudioUrl) ||
+            ContainsSensitiveStreamUrl(PageUrl) || ContainsSensitiveStreamUrl(Referrer) ||
+            ContainsSensitiveStreamUrl(AudioReferrer) ||
+            (Segments?.Any(s => ContainsSensitiveStreamUrl(s.Url)) ?? false) ||
+            (AudioSegments?.Any(s => ContainsSensitiveStreamUrl(s.Url)) ?? false);
+
+        Cookies = null;
+        PoToken = "";
+        StreamHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        AudioStreamHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (!mustRecapture) return;
+
+        Url = "";
+        AudioUrl = "";
+        Segments = null;
+        AudioSegments = null;
+        Referrer = "";
+        AudioReferrer = "";
+        UserAgent = "";
+        PageUrl = SafePageUrl(PageUrl);
+        IsSabr = false;
+        RequiresFreshBrowserCapture = Status != DownloadStatus.Completed && !IsTorrent;
+        if (RequiresFreshBrowserCapture)
+        {
+            Status = DownloadStatus.Paused;
+            WaitForQueueStart = false;
+            StatusText = AppLocalization.Get("download.replayRequired");
+        }
+    }
+
+    private bool HasTransientBrowserCredentials() =>
+        (Cookies?.Count ?? 0) > 0 || !string.IsNullOrWhiteSpace(PoToken) || IsSabr ||
+        HasSensitiveHeader(StreamHeaders) || HasSensitiveHeader(AudioStreamHeaders);
+
+    private static bool HasSensitiveHeader(Dictionary<string, string>? headers) =>
+        headers?.Any(h => h.Key.Equals("Cookie", StringComparison.OrdinalIgnoreCase) ||
+            h.Key.Equals("Authorization", StringComparison.OrdinalIgnoreCase) ||
+            h.Key.Equals("Proxy-Authorization", StringComparison.OrdinalIgnoreCase)) ?? false;
+
+    private static bool ContainsSensitiveStreamUrl(string? value)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)) return false;
+        return HasSensitiveQueryParameter(uri.Query);
+    }
+
+    private static bool HasSensitiveQueryParameter(string? query)
+    {
+        foreach (string pair in (query ?? "").TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            string key;
+            try { key = Uri.UnescapeDataString(pair.Split('=', 2)[0]); }
+            catch { continue; }
+            key = key.Trim().ToLowerInvariant();
+            if (IsSensitiveQueryName(key))
+                return true;
+        }
+        return false;
+    }
+
+    private static bool IsSensitiveQueryName(string key) =>
+        key.Contains("token") || key.Contains("signature") || key is "sig" or "auth" or
+        "authorization" or "credential" or "cookie" or "session" or "policy" or
+        "key" or "expires" or "expire" or "pot" or "sparams" or "lsig";
+
+    private static string SafePageUrl(string? value)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)) return "";
+        string[] safePairs = uri.Query.TrimStart('?')
+            .Split('&', StringSplitOptions.RemoveEmptyEntries)
+            .Where(pair =>
+            {
+                string key;
+                try { key = Uri.UnescapeDataString(pair.Split('=', 2)[0]); }
+                catch { return false; }
+                return !IsSensitiveQueryName(key.Trim().ToLowerInvariant());
+            })
+            .ToArray();
+        return uri.GetLeftPart(UriPartial.Path) +
+            (safePairs.Length > 0 ? "?" + string.Join("&", safePairs) : "");
     }
 
     /// <summary>Localized "Added ..." line shown under each download.</summary>

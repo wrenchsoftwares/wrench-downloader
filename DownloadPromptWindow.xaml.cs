@@ -46,7 +46,7 @@ public sealed partial class DownloadPromptWindow : Window
         Title = AppLocalization.Format("prompt.windowTitle", item.Title);
 
         TitleBox.Text = item.Title;
-        UrlBox.Text = item.Url;
+        UrlBox.Text = IsPageFallback(item) ? AppLocalization.Get("prompt.streamUrlPending") : item.Url;
         PlaylistCheckBox.Visibility = HasYouTubePlaylist(item.Url) || HasYouTubePlaylist(item.PageUrl)
             ? Visibility.Visible
             : Visibility.Collapsed;
@@ -66,6 +66,10 @@ public sealed partial class DownloadPromptWindow : Window
         string downloads = SettingsHelper.DownloadFolder;
         FolderBox.Text = downloads;
     }
+
+    private static bool IsPageFallback(DownloadItem item) =>
+        !string.IsNullOrWhiteSpace(item.PageUrl) &&
+        string.Equals(item.Url?.TrimEnd('/'), item.PageUrl.TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
 
     private void ApplyLocalization()
     {

@@ -241,6 +241,15 @@ public sealed partial class MainWindow : Window
                     foreach (var item in loaded)
                     {
                         item.SetDispatcherQueue(DispatcherQueue);
+                        item.ScrubLoadedHistoryCredentials();
+                        if (item.RequiresFreshBrowserCapture)
+                        {
+                            item.Status = DownloadStatus.Paused;
+                            item.WaitForQueueStart = false;
+                            item.StatusText = AppLocalization.Get("download.replayRequired");
+                            Downloads.Add(item);
+                            continue;
+                        }
                         if (item.ScheduledAt.HasValue)
                         {
                             item.WaitForQueueStart = true;
@@ -285,6 +294,9 @@ public sealed partial class MainWindow : Window
                         Downloads.Add(item);
                     }
                 }
+                // Rewrite legacy history after removing any browser credentials
+                // or short-lived signed URLs loaded from older versions.
+                SaveHistoryToFile();
                 PumpDownloadQueue();
                 // Once history.json exists (even if empty because the user removed items), do NOT scan the folder.
                 return;
@@ -369,14 +381,14 @@ public sealed partial class MainWindow : Window
             // Access UI collection snapshot safely
             if (DispatcherQueue.HasThreadAccess)
             {
-                itemsToSave = Downloads.Take(100).ToList();
+                itemsToSave = Downloads.Take(100).Select(item => item.CreateHistorySnapshot()).ToList();
             }
             else
             {
                 var tcs = new TaskCompletionSource<List<DownloadItem>>();
                 DispatcherQueue.TryEnqueue(() =>
                 {
-                    tcs.TrySetResult(Downloads.Take(100).ToList());
+                    tcs.TrySetResult(Downloads.Take(100).Select(item => item.CreateHistorySnapshot()).ToList());
                 });
                 if (!tcs.Task.Wait(1000)) return;
                 itemsToSave = tcs.Task.Result;
@@ -561,6 +573,15 @@ public sealed partial class MainWindow : Window
         DispatcherQueue.TryEnqueue(async () =>
         {
             item.SetDispatcherQueue(DispatcherQueue);
+            if (shouldPrompt)
+            {
+                // Page-fallback rows normally show a watch/page URL in the
+                // confirmation dialog. Resolve one direct media URL first so
+                // the dialog matches the stream the downloader will fetch.
+                // This is best-effort and bounded; protected/unavailable
+                // media remains subject to the normal browser-access rules.
+                await DownloadEngine.ResolvePromptStreamUrlAsync(item);
+            }
             if (await TryResumeExistingAsync(item, allowDialog: shouldPrompt))
                 return;
             if (shouldPrompt)
@@ -590,9 +611,10 @@ public sealed partial class MainWindow : Window
             return Downloads.FirstOrDefault(d =>
                 !string.Equals(d.Id, candidate.Id, StringComparison.Ordinal) &&
                 d.Status != DownloadStatus.Completed &&
-                string.Equals(d.Url, candidate.Url, StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(d.Quality ?? "", candidate.Quality ?? "", StringComparison.OrdinalIgnoreCase) &&
-                DownloadEngine.IsUnfinishedTemp(d));
+                DownloadEngine.IsUnfinishedTemp(d) &&
+                (string.Equals(d.Url, candidate.Url, StringComparison.OrdinalIgnoreCase) ||
+                 (d.RequiresFreshBrowserCapture && SamePageIdentity(d.PageUrl, candidate.PageUrl))));
         }
         catch { return null; }
     }
@@ -654,6 +676,11 @@ public sealed partial class MainWindow : Window
         existing.AudioInitRange = fresh.AudioInitRange;
         existing.Cookies = fresh.Cookies;
         existing.PoToken = fresh.PoToken;
+        existing.StreamHeaders = fresh.StreamHeaders;
+        existing.AudioStreamHeaders = fresh.AudioStreamHeaders;
+        existing.IsSabr = fresh.IsSabr;
+        existing.Itag = fresh.Itag;
+        existing.RequiresFreshBrowserCapture = false;
         existing.Referrer = string.IsNullOrWhiteSpace(fresh.Referrer) ? existing.Referrer : fresh.Referrer;
         existing.UserAgent = string.IsNullOrWhiteSpace(fresh.UserAgent) ? existing.UserAgent : fresh.UserAgent;
         existing.PageUrl = string.IsNullOrWhiteSpace(fresh.PageUrl) ? existing.PageUrl : fresh.PageUrl;
@@ -664,6 +691,15 @@ public sealed partial class MainWindow : Window
         if (!Downloads.Contains(existing)) Downloads.Insert(0, existing);
         QueueDownload(existing);
         StatusTextBlock.Text = AppLocalization.Format("main.started", existing.Title);
+    }
+
+    private static bool SamePageIdentity(string? left, string? right)
+    {
+        if (!Uri.TryCreate(left, UriKind.Absolute, out var leftUri) ||
+            !Uri.TryCreate(right, UriKind.Absolute, out var rightUri))
+            return false;
+        return string.Equals(leftUri.GetLeftPart(UriPartial.Query), rightUri.GetLeftPart(UriPartial.Query),
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private void OnQueueToggleClick(object sender, RoutedEventArgs e)

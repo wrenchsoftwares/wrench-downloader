@@ -92,6 +92,34 @@ public class ExtensionBridgeServer
         catch { return null; }
     }
 
+    private static Dictionary<string, string> ParseStreamHeaders(JsonElement root, string name)
+    {
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        string[] allowed =
+        [
+            "accept", "accept-language", "authorization", "cookie", "origin", "referer",
+            "user-agent", "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform",
+            "sec-fetch-dest", "sec-fetch-mode", "sec-fetch-site", "sec-fetch-user"
+        ];
+        try
+        {
+            if (!root.TryGetProperty(name, out var element) || element.ValueKind != JsonValueKind.Object)
+                return headers;
+            foreach (var property in element.EnumerateObject())
+            {
+                if (!allowed.Contains(property.Name, StringComparer.OrdinalIgnoreCase) ||
+                    property.Value.ValueKind != JsonValueKind.String)
+                    continue;
+                string value = property.Value.GetString() ?? "";
+                if (value.Length > 16_384) continue;
+                headers[property.Name] = value;
+                if (headers.Count >= 20) break;
+            }
+        }
+        catch { }
+        return headers;
+    }
+
     private async Task HandleRequest(HttpListenerContext context)
     {
         var req = context.Request;
@@ -148,15 +176,8 @@ public class ExtensionBridgeServer
                 string audioInitRange = root.TryGetProperty("audioInitRange", out var airEl) ? airEl.GetString() ?? "" : "";
                 List<StreamSegment>? segments = ParseSegments(root, "segments");
                 List<StreamSegment>? audioSegments = ParseSegments(root, "audioSegments");
-                var streamHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                if (root.TryGetProperty("streamHeaders", out var shEl) && shEl.ValueKind == JsonValueKind.Object)
-                {
-                    foreach (var property in shEl.EnumerateObject())
-                    {
-                        if (property.Value.ValueKind == JsonValueKind.String)
-                            streamHeaders[property.Name] = property.Value.GetString() ?? "";
-                    }
-                }
+                var streamHeaders = ParseStreamHeaders(root, "streamHeaders");
+                var audioStreamHeaders = ParseStreamHeaders(root, "audioStreamHeaders");
                 List<BrowserCookie>? cookies = null;
                 if (root.TryGetProperty("cookies", out var cookiesEl) && cookiesEl.ValueKind == JsonValueKind.Array)
                 {
@@ -197,6 +218,8 @@ public class ExtensionBridgeServer
                         Referrer = referrer,
                         UserAgent = userAgent,
                         Cookies = cookies,
+                        StreamHeaders = streamHeaders,
+                        AudioStreamHeaders = audioStreamHeaders,
                         PoToken = poToken,
                         AudioUrl = audioUrl,
                         AudioReferrer = audioReferrer,
@@ -216,7 +239,7 @@ public class ExtensionBridgeServer
                     DownloadEngine.Track(item,
                         $"BRIDGE-RECV site={SafeHost(pageUrl)} quality={quality} " +
                         $"cookies={(cookies?.Count ?? 0)} pot={(!string.IsNullOrEmpty(poToken) ? "yes" : "no")} prompt={showPrompt} " +
-                        $"sabr={isSabr} segs={(segments?.Count ?? 0)} asegs={(audioSegments?.Count ?? 0)} url={url}");
+                        $"sabr={isSabr} segs={(segments?.Count ?? 0)} asegs={(audioSegments?.Count ?? 0)} urlHost={SafeHost(url)}");
 #endif
 
                     byte[] respBytes = Encoding.UTF8.GetBytes("{\"success\":true,\"id\":\"" + item.Id + "\"}");

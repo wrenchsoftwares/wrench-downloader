@@ -45,19 +45,14 @@ fn is_expired(msg: &str) -> bool {
     m.contains("410") && (m.contains("gone") || m.contains("unable to download"))
 }
 
-fn tools() -> (String, String, String, Option<String>) {
+fn tools() -> (String, String, String) {
     let parts = crate::paths::Paths::get().parts();
     let aria = util::tool_path("aria2c.exe", &[
         &parts.join("aria2c.exe").to_string_lossy(),
     ]);
     let ytdlp = util::tool_path("yt-dlp", &[]);
     let ffmpeg = util::tool_path("ffmpeg", &[]);
-    let js = ["deno", "node"].into_iter().find(|name| {
-        std::process::Command::new(name).arg("--version")
-            .stdout(Stdio::null()).stderr(Stdio::null()).status()
-            .map(|s| s.success()).unwrap_or(false)
-    }).map(str::to_string);
-    (ytdlp, ffmpeg, aria, js)
+    (ytdlp, ffmpeg, aria)
 }
 
 pub(crate) async fn run_process(
@@ -154,47 +149,51 @@ fn output_template(item: &DownloadItem, parts: &Path, title: &str) -> String {
     }
 }
 
+/// Mirrors the working ytdl.py invocation: let yt-dlp discover Deno on PATH
+/// (no --js-runtimes), use its canonical format selectors, and keep the
+/// EJS solver flag that makes age/login gates work.
 fn common_args(
     item: &DownloadItem,
     settings: &Settings,
-    js: Option<&str>,
+    ffmpeg: &str,
+    aria_active: bool,
 ) -> Vec<String> {
     let mut a = vec![
         if item.download_playlist { "--yes-playlist".into() } else { "--no-playlist".into() },
-        "--no-warnings".into(), "--continue".into(), "--socket-timeout".into(), "20".into(),
-        "--retries".into(), "10".into(), "--fragment-retries".into(), "20".into(),
-        "--concurrent-fragments".into(), settings.concurrent_fragments.clamp(1, 32).to_string(),
+        "--no-warnings".into(),
+        "--retries".into(), "10".into(),
+        "--fragment-retries".into(), "10".into(),
+        "--progress".into(),
     ];
+    // Required for YouTube's JS challenge solver.
+    a.extend(["--remote-components".into(), "ejs:github".into()]);
+
+    if item.quality == "audio" {
+        a.extend(["-f".into(), "bestaudio/best".into(),
+            "-x".into(), "--audio-format".into(), "mp3".into(), "--audio-quality".into(), "0".into()]);
+    } else {
+        a.extend(["-f".into(), classify::quality_selector(&item.quality),
+            "--merge-output-format".into(), "mp4".into()]);
+    }
+
     if settings.maximum_download_rate_kbps > 0 {
         a.push("--limit-rate".into());
         a.push(format!("{}K", settings.maximum_download_rate_kbps));
     }
-    a.extend(["--buffer-size".into(), "64K".into(), "--http-chunk-size".into(), "10M".into(),
-        "--throttled-rate".into(), "100K".into()]);
-    if let Some(js) = js { a.extend(["--js-runtimes".into(), js.to_string()]); }
-    // Required for YouTube's JS challenge solver; without it Deno runs but
-    // the solver is skipped and age/logged-in formats disappear.
-    a.extend(["--remote-components".into(), "ejs:github".into()]);
-    if item.quality == "audio" {
-        a.extend(["-x".into(), "--audio-format".into(), "mp3".into()]);
+    // Speed settings from the working script.
+    if aria_active {
+        a.extend(["--downloader".into(), "aria2c".into(), "--downloader-args".into(),
+            "aria2c:-x 16 -s 16 -k 1M --file-allocation=none".into()]);
     } else {
-        a.extend(["-f".into(), classify::quality_selector(&item.quality),
-            "--remux-video".into(), "mp4".into(),
-            "--merge-output-format".into(), "mp4".into()]);
+        a.extend(["-N".into(), "16".into(), "--http-chunk-size".into(), "10M".into()]);
+    }
+    if !ffmpeg.is_empty() && ffmpeg != "ffmpeg" {
+        a.extend(["--ffmpeg-location".into(), ffmpeg.to_string()]);
     }
     let referer = if !item.referrer.is_empty() { &item.referrer } else { &item.page_url };
     if !referer.is_empty() { a.extend(["--referer".into(), referer.clone()]); }
     if !item.user_agent.is_empty() { a.extend(["--user-agent".into(), item.user_agent.clone()]); }
     a
-}
-
-fn aria_suffix(settings: &Settings) -> Vec<String> {
-    let n = settings.concurrent_fragments.clamp(1, 8);
-    let mut args = format!("-x {} -s {} -k 1M --file-allocation=none --retry-wait=2 --max-tries=5", n, n);
-    if settings.maximum_download_rate_kbps > 0 {
-        args.push_str(&format!(" --max-download-limit={}K", settings.maximum_download_rate_kbps));
-    }
-    vec!["--downloader".into(), "aria2c".into(), "--downloader-args".into(), format!("aria2c:{}", args)]
 }
 
 fn parse_ytdlp_progress(line: &str) -> Option<(f64, String)> {
@@ -272,7 +271,7 @@ pub async fn ytdlp_download(
     id: &str,
     item: DownloadItem,
 ) -> anyhow::Result<String> {
-    let (ytdlp, _ffmpeg, aria, js) = tools();
+    let (ytdlp, ffmpeg, aria) = tools();
     let token = item.token.clone();
     let settings = settings_ref.lock().clone();
     let title = {
@@ -292,7 +291,9 @@ pub async fn ytdlp_download(
     };
     let parts = parts_subdir(&item, &title);
     let template = output_template(&item, &parts, &title);
-    let common = common_args(&item, &settings, js.as_deref());
+    let aria_available = Path::new(&aria).exists() || std::process::Command::new(&aria).arg("--version").stdout(Stdio::null()).stderr(Stdio::null()).status().map(|s| s.success()).unwrap_or(false);
+    let mut aria_active = aria_available && !classify::is_manifest_url(&item.url);
+    let mut common = common_args(&item, &settings, &ffmpeg, aria_active);
     let jar = write_cookie_jar(&item, "wd_session");
     let challenge_jar = if item.page_url.to_ascii_lowercase().contains("challenge") { write_cookie_jar(&item, "wd_challenge") } else { None };
 
@@ -328,8 +329,6 @@ pub async fn ytdlp_download(
     }
     if plan.is_empty() { anyhow::bail!("no candidate URLs"); }
 
-    let aria_available = Path::new(&aria).exists() || std::process::Command::new(&aria).arg("--version").stdout(Stdio::null()).stderr(Stdio::null()).status().map(|s| s.success()).unwrap_or(false);
-    let mut aria_active = aria_available && !classify::is_manifest_url(&item.url);
     let mut circuit: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
     let mut last_error = String::new();
     let mut idx = 0usize;
@@ -344,7 +343,6 @@ pub async fn ytdlp_download(
 
         let mut args = common.clone();
         args.extend(cookie_args.clone());
-        if aria_active { args.extend(aria_suffix(&settings)); }
         args.extend(["-P".into(), format!("temp:{}", parts.display()), "-o".into(), template.clone(), url.clone()]);
 
         update(store, ui, id, |i| {
@@ -387,6 +385,7 @@ pub async fn ytdlp_download(
         let error_text = format!("{} {}", stdout, stderr);
         if error_text.to_ascii_lowercase().contains("aria2c") && aria_active {
             aria_active = false;
+            common = common_args(&item, &settings, &ffmpeg, false);
             continue; // retry same URL natively
         }
         if is_expired(&error_text) {
@@ -527,7 +526,7 @@ pub async fn sabr_download(
     let mut final_source = video.clone();
     if let Some(audio_segments) = item.audio_segments.as_ref().filter(|s| !s.is_empty()) {
         if let Ok(audio) = build_track(&client, audio_segments, &item.audio_init_range, 0, &item, &parts, "audio").await {
-            let (_, ffmpeg, _, _) = tools();
+            let (_, ffmpeg, _) = tools();
             let output = parts.join("muxed.mp4");
             let args = vec!["-y".into(), "-i".into(), video.to_string_lossy().into_owned(),
                 "-i".into(), audio.to_string_lossy().into_owned(), "-c".into(), "copy".into(),
@@ -617,7 +616,7 @@ pub async fn extension_resolved_download(
         let audio_path = parts.join("audio.m4a");
         match fetch_track(&client, &item.audio_url, &item, &audio_path, &token).await {
             Ok(n) if n >= 16 * 1024 => {
-                let (_, ffmpeg, _, _) = tools();
+                let (_, ffmpeg, _) = tools();
                 let output = parts.join("muxed.mp4");
                 let args = vec!["-y".into(), "-i".into(), video_path.to_string_lossy().into_owned(),
                     "-i".into(), audio_path.to_string_lossy().into_owned(), "-c".into(), "copy".into(),

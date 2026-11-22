@@ -110,8 +110,7 @@ pub fn quality_selector(quality: &str) -> String {
         "audio" => "bestaudio/best".into(),
         other => {
             let h: i32 = other.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap_or(1080);
-            let w = (h * 16) / 9;
-            format!("bv*[height<={h}]+ba/b[height<={h}]/bv*[height<={w}][width<={h}]+ba/b[height<={w}][width<={h}]/bv*+ba/b")
+            format!("bv*[height<={h}][ext=mp4]+ba[ext=m4a]/b[height<={h}][ext=mp4]/bv*[height<={h}]+ba/b[height<={h}]")
         }
     }
 }

@@ -127,8 +127,16 @@ Dev smoke test with portable data (keeps `%LOCALAPPDATA%` untouched):
 
 ## yt-dlp path — verified fixes
 
-- Prefer **Deno** over Node for `--js-runtimes`; always pass
-  `--remote-components ejs:github` and `--merge-output-format mp4`.
+- Mirror the user's working `D:\ytdl.py` invocation: pass
+  `--remote-components ejs:github`, `--merge-output-format mp4`, `--no-playlist`,
+  `--retries 10`, `--fragment-retries 10`, `--progress`, and let yt-dlp
+  **discover Deno on PATH** — do NOT pass `--js-runtimes`, which restricts the
+  runtime and breaks the EJS solver.
+- Numeric quality selector from that script:
+  `bv*[height<=H][ext=mp4]+ba[ext=m4a]/b[height<=H][ext=mp4]/bv*[height<=H]+ba/b[height<=H]`.
+- Use aria2c with `aria2c:-x 16 -s 16 -k 1M --file-allocation=none` when
+  available, otherwise `-N 16 --http-chunk-size 10M`. Pass `--ffmpeg-location`
+  when ffmpeg is not just `ffmpeg` on PATH.
 - Do **not** pass `--impersonate chrome` unless the installed yt-dlp supports
   impersonation targets — the current install aborts with
   `Impersonate target "chrome" is not available`.

@@ -143,6 +143,10 @@ Dev smoke test with portable data (keeps `%LOCALAPPDATA%` untouched):
   whose name/domain/path/value contain tabs or newlines, and omit `--cookies`
   entirely if none survive — otherwise yt-dlp rejects the whole file with
   "invalid Netscape format cookies file". Log cookie counts only, never values.
+- Canonical Netscape rows use `.youtube.com / TRUE` for domain cookies and
+  `www.youtube.com / FALSE` for host-only cookies. Do not rewrite every domain
+  to a leading-dot form, and keep the leading dot from `chrome.cookies` in the
+  bridge payload. Expiry `0` is valid for session cookies.
 - Debug builds panic with `Duplicate a11y node id` when repeated labels share
   an implicit id. Give labels inside repeated download cards explicit per-item
   `ElementId`s.

@@ -123,7 +123,7 @@ fn build_item(p: BridgePayload) -> DownloadItem {
             .take(100)
             .map(|c| BrowserCookie {
                 name: c.name, value: c.value,
-                domain: c.domain.trim_start_matches('.').to_string(),
+                domain: c.domain.clone(),
                 path: if c.path.is_empty() { "/".into() } else { c.path },
                 secure: c.secure, expiry: c.expiry,
             })

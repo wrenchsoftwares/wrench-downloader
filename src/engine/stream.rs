@@ -114,8 +114,10 @@ fn write_cookie_jar(item: &DownloadItem, prefix: &str) -> Option<PathBuf> {
             safe_cookie_field(&c.path, true),
             safe_cookie_field(&c.value, false),
         ) else { continue };
+        // Canonical Netscape format: a leading dot + TRUE means "include
+        // subdomains"; a bare host + FALSE means host-only. Keep the domain
+        // exactly as the browser reported it.
         let flag = if domain.starts_with('.') { "TRUE" } else { "FALSE" };
-        let domain = if domain.starts_with('.') { domain } else { format!(".{}", domain) };
         text.push_str(&format!("{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
             domain, flag, cookie_path, if c.secure { "TRUE" } else { "FALSE" },
             if c.expiry > 0 { c.expiry } else { 0 }, name, value));

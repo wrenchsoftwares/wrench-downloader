@@ -110,6 +110,10 @@ Dev smoke test with portable data (keeps `%LOCALAPPDATA%` untouched):
   extension supplied no cookies. Never probe other browsers when a fresh jar
   exists — it produces misleading "could not find browser cookies database"
   errors.
+- The prompt window includes a quality selector (best/2160p/1440p/1080p/720p/
+  480p/360p/audio). The extension's menu can only show qualities the player
+  exposed (sometimes just 1080p and 360p); the app lets the user pick any
+  supported quality and yt-dlp resolves it from the page URL with fresh cookies.
 - The prompt is a separate OS window (`src/prompt.rs`, `gpui_kit::open_window`).
   Call `cx.activate(true)` and `window.activate_window()` so Windows brings it
   forward instead of leaving it behind the browser/taskbar.

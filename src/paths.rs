@@ -5,6 +5,7 @@ use std::sync::OnceLock;
 #[derive(Debug, Clone)]
 pub struct Paths {
     pub base_dir: PathBuf,
+    pub package_dir: PathBuf,
     pub data_dir: PathBuf,
     pub exe_dir: PathBuf,
     pub portable: bool,
@@ -12,14 +13,29 @@ pub struct Paths {
 
 static PATHS: OnceLock<Paths> = OnceLock::new();
 
+fn find_package_dir(exe_dir: &Path) -> PathBuf {
+    let mut current = Some(exe_dir);
+    for _ in 0..6 {
+        let Some(dir) = current else { break };
+        let is_root = dir.join("portable.mode").exists()
+            || dir.join("Cargo.toml").exists()
+            || dir.join("Languages").is_dir()
+            || dir.join("chrome extension").is_dir();
+        if is_root { return dir.to_path_buf(); }
+        current = dir.parent();
+    }
+    exe_dir.to_path_buf()
+}
+
 impl Paths {
     pub fn init() -> &'static Paths {
         PATHS.get_or_init(|| {
             let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("."));
             let exe_dir = exe.parent().unwrap_or(Path::new(".")).to_path_buf();
-            // Portable layout: package dir is the parent of the binary directory
-            // (matches C#: PackageDirectory = parent of AppContext.BaseDirectory).
-            let package_dir = exe_dir.parent().unwrap_or(&exe_dir).to_path_buf();
+            // Find the package root by walking up from the binary. This works
+            // both in development (target/debug) and when the exe sits directly
+            // next to portable.mode / Languages / the extension folder.
+            let package_dir = find_package_dir(&exe_dir);
             let portable = package_dir.join("portable.mode").exists();
             let data_dir = if portable {
                 package_dir.join("Data")
@@ -30,7 +46,8 @@ impl Paths {
                     .join("WrenchDownloader")
             };
             Paths {
-                base_dir: if portable { package_dir } else { data_dir.clone() },
+                base_dir: if portable { package_dir.clone() } else { data_dir.clone() },
+                package_dir,
                 data_dir,
                 exe_dir,
                 portable,
@@ -48,16 +65,16 @@ impl Paths {
     pub fn parts(&self) -> PathBuf { self.data_dir.join("Parts") }
     pub fn torrent_cache(&self) -> PathBuf { self.data_dir.join("torrent-cache") }
 
-    /// Locate a shipped folder both in portable layout and next to the binary.
+    /// Locate a shipped folder next to the package root or the binary.
     pub fn resource(&self, name: &str) -> PathBuf {
-        let a = self.base_dir.join(name);
-        if a.exists() { return a; }
-        let b = self.exe_dir.join(name);
-        if b.exists() { return b; }
-        // Development: rust-app/ lives inside the repository next to the C# app.
-        let c = self.exe_dir.parent().map(|p| p.join(name)).unwrap_or_default();
-        if c.exists() { return c; }
-        a
+        for candidate in [
+            self.package_dir.join(name),
+            self.exe_dir.join(name),
+            self.base_dir.join(name),
+        ] {
+            if candidate.exists() { return candidate; }
+        }
+        self.package_dir.join(name)
     }
 }
 

@@ -37,11 +37,11 @@
   URLs with another downloader.
 
 ## 4. Build & test discipline
-- .NET 9 WinUI 3, `dotnet build WrenchDownloader.csproj -c Debug`.
-  Stop the running app first (it locks the exe).
-- After XAML `x:Name`/handler changes: delete `obj/` then rebuild.
+- Rust + GPUI Kit at the repo root: `cargo build` / `cargo build --release`.
+  Stop the running app first (it locks the exe on Windows).
 - After extension changes: reload in `chrome://extensions` AND refresh open
   video tabs (reload invalidates tab contexts).
-- Bridge: `http://127.0.0.1:45732`; dialog OFF for silent tests.
-- Debug builds: no tray, close exits directly. Release: tray with
-  `Open app / Settings / Exit`.
+- Bridge: `http://127.0.0.1:45732`; dialog OFF for silent tests (`prompt:false`
+  in the `/api/download` payload).
+- `target/` holds large debug artifacts and is gitignored. The former WinUI 3
+  app is archived on the `archive-winui` branch.

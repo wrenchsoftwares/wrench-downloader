@@ -1,89 +1,82 @@
-# 🔧 Wrench Downloader v26.3.1
+# Wrench Downloader — Rust / GPUI Kit rewrite
 
-> High-speed multi-threaded media and file downloader with integrated Chrome Companion stream sniffer. An ultra-fast, modern alternative to IDM built with .NET 9 and Windows App SDK (WinUI 3).
+Wrench Downloader is a Rust desktop app built with
+**[GPUI Kit](https://gpui-kit.com/)** (`gpui-kit 0.10`). This repository is
+Rust-only; the former WinUI 3 app is preserved on the `archive-winui` branch.
 
----
+## Build & run
 
-## ✨ Features
-
-- **Blazing Fast Multi-Part Downloads**: Downloads files in concurrent parallel fragments with automatic resume and chunk assembly.
-- **Smart Stream Sniffing**: Integrated Chrome extension sniffs HLS (`.m3u8`), DASH (`.mpd`), MP4, and WebM streams from video players in real-time.
-- **Feed & Timeline Aware**: Accurately scopes videos on feeds (such as X/Twitter, Reddit) to download the exact clicked video rather than the feed.
-- **Format & Quality Selection**: Extract real rendition playlists (up to 4K / 1080p / 720p) or download audio-only MP3s.
-- **Download Manager Controls**: Queue limits, save-for-later items that wait for **Start Queue**, playlist downloads, speed caps, and optional clipboard URL capture.
-- **Organized Downloads**: Optional folders by media/file type, with intermediate video parts kept outside the downloads folder.
-- **Localized Interface**: English, French, and Arabic, including right-to-left layout for Arabic.
-- **Modern Windows UI**: WinUI 3 interface with dark/light theme support, queue management, progress meters, and right-click actions.
-- **yt-dlp Engine Integration**: Fallback extraction engine for encrypted, segmented, or complex video platforms.
-
-Choose the interface language in **Settings → Language**. The selection is saved with portable settings when running the portable release. Clipboard monitoring is opt-in under **Settings → Downloads**; captured links always open the confirmation dialog.
-
----
-
-## 🚀 Getting Started
-
-### 1. Requirements
-- Windows 10 (version 1809 / build 17763) or Windows 11
-- Install with `WrenchDownloader-26.3.1-Setup.exe` (recommended: Start Menu entries, uninstaller, optional start-with-Windows). A portable ZIP is also available and needs no installation.
-- Neither package requires a .NET installation. The .NET 9 SDK is only needed to build from source.
-
-### 2. Build & Run Desktop App
-```bash
-# Clone the repository
-git clone https://github.com/wrenchsoftwares/wrench-downloader.git
-cd wrench-downloader
-
-# Build and run
-dotnet build WrenchDownloader.csproj -c Release
-dotnet run --project WrenchDownloader.csproj
+```powershell
+cargo build                 # debug
+cargo build --release       # release
+cargo run
 ```
 
-### 3. Create a Release Package
-Primary distribution is the installer: run `./release-installer.ps1` from PowerShell (requires [Inno Setup 6](https://jrsoftware.org/isinfo.php)). It publishes the self-contained Windows x64 app and compiles `artifacts/releases/26.3.1/WrenchDownloader-26.3.1-Setup.exe`. Installed mode is non-portable: settings, history, and logs live in `%LOCALAPPDATA%\WrenchDownloader`.
+The binary is `target\debug\wrench-downloader.exe` (or `target\release\...`).
 
-Portable alternative: run `./release.ps1` from PowerShell. It publishes a self-contained Windows x64 portable package at `artifacts/releases/26.3.1/WrenchDownloader-26.3.1-win-x64.zip`. Extract it to a writable folder and run `WrenchDownloader.exe` in the master folder. The Chrome extension is in `chrome extension`, app dependencies are grouped under `Runtime`, and settings, history, and startup logs stay in `Data`.
+## Package layout
 
-The package includes the application resource index (`WrenchDownloader.pri`) beside the executable so WinUI can resolve its XAML resources at startup. Downloads are saved to the user's Downloads folder by default.
-
-### 4. Install Chrome Companion Extension
-Easiest: open Settings → **Browser integration** and click **Show extension folder** next to Google Chrome — it copies fresh files to `%LOCALAPPDATA%\WrenchDownloader\chrome-extension` and opens it. Then follow the steps at the top of the tab (Developer mode → Load unpacked). Manual alternative:
-1. Open Google Chrome (or Edge/Brave/Chromium).
-2. Navigate to `chrome://extensions/`.
-3. Enable **Developer mode** in the top right corner.
-4. Click **Load unpacked** and select `chrome extension` from the extracted release ZIP or repository (the in-app button copies it to `%LOCALAPPDATA%\WrenchDownloader\chrome-extension`).
-5. The extension will automatically connect to Wrench Downloader's local bridge on `http://127.0.0.1:45732`.
-
----
-
-## 🛠 Project Structure
+For portable use, ship the binary with a `portable.mode` marker at the package
+root, plus these sibling folders:
 
 ```
-wrench-downloader/
-├── WrenchDownloader.csproj       # WinUI 3 desktop application (.NET 9)
-├── AppLocalization.cs            # Localized strings and culture handling
-├── Languages/                    # English, French, and Arabic catalogs
-├── DownloadEngine.cs             # Multi-threaded download & assembly engine
-├── ExtensionBridgeServer.cs      # Local HTTP bridge server for Chrome extension
-├── MainWindow.xaml               # Main dashboard & download queue
-├── SettingsDialog.cs             # App settings & configuration
-├── Package.appxmanifest          # App package manifest (v26.3.1)
-├── chrome extension/             # Chrome Manifest V3 Companion extension
-│   ├── injected.js               # In-page fetch / XHR stream interceptor
-│   ├── content.js                # Video detector & floating download overlay
-│   ├── background.js             # Network request sniffer & desktop bridge
-│   └── manifest.json             # Extension manifest (v26.3.1)
-├── docs/
-│   └── ARCHITECTURE.md           # In-depth architectural & download grabbing guide
-├── tests/                        # Playwright verification and integration scripts
-├── push.bat                      # Windows one-click script to stage, commit & push to main
-├── push.ps1                      # PowerShell script to push to main
-├── release.ps1                   # Builds and packages an organized release
-├── artifacts/releases/           # Generated, versioned release packages (git-ignored)
-└── WrenchDownloader.sln          # Solution file
+WrenchDownloader/
+  portable.mode
+  wrench-downloader.exe
+  Languages/            # en/fr/ar JSON
+  chrome extension/     # Manifest V3 companion
+  Data/                 # created at runtime: history.json, settings.json, Parts/
 ```
 
----
+Installed (non-portable) mode stores data in `%LOCALAPPDATA%\WrenchDownloader`.
+The JSON schemas remain compatible with the archived WinUI app's history and
+settings files.
 
-## 📄 License
+## Architecture
 
-Developed by [Wrench Softwares](https://github.com/wrenchsoftwares). All rights reserved.
+| Module | Role |
+| --- | --- |
+| `bridge.rs` | axum HTTP bridge on `127.0.0.1:45732` — identical endpoints, payload fields and CORS/PNA headers as the C# `ExtensionBridgeServer`, so the existing Chrome extension works unchanged. |
+| `engine/` | Tokio download engine: structural URL classification, direct HTTP with `Range` resume, token-bucket throttling, yt-dlp/aria2c/ffmpeg orchestration, SABR segment replay, extension-resolved stream download, aria2c torrent flow. |
+| `model.rs` | `DownloadItem`, settings and history schemas with credential scrubbing. JSON field names match the C# app. |
+| `localization.rs` | Loads `Languages/*.json` with English fallback. |
+| `platform.rs` | Magnet protocol registration, clipboard link monitoring. |
+| `ui.rs` | GPUI Kit views: header, toolbar, download cards, prompt/settings/about/torrent-picker overlays, theming. |
+
+Engine events reach the UI through a `tokio::sync::mpsc` channel pumped into
+GPUI's App context; UI commands go back through an unbounded command channel.
+
+## Implemented behaviour
+
+- Bridge `/api/health`, `/api/download`, `OPTIONS` with exact headers; payload
+  allow-lists and caps (segments, headers, cookies).
+- Structural detection (manifests, playback URLs, redirectors, page URLs,
+  direct files) with no per-site branches.
+- Direct download: `Content-Disposition`/URL naming, 4 retry attempts, resume
+  from `.part`, speed/ETA/progress, cancellation keeps partial bytes, robust
+  move to the final folder.
+- Streaming: yt-dlp argument construction, format selectors, cookie jars,
+  session-held-back retry plan, gated-error/browser/client fallback, circuit
+  breaker, rate-limit retries, aria2c for non-manifest URLs.
+- SABR: range replay with overlap trimming, init range, ffmpeg mux.
+- Extension-resolved playback: signed-expiry checks, live browser headers,
+  video+audio mux with size floors.
+- Torrents: aria2c metadata resolution, bencode file list, file picker,
+  selective download.
+- Queue pump, pause/resume, history persistence, portable/installed paths,
+  clipboard monitoring, magnet registration, Arabic/French/English locale files.
+
+## Known simplifications vs the C# app
+
+- The system-tray icon and `ITaskbarList3` progress overlay are not ported yet.
+- Settings/About/Prompt/Torrent picker render as modal overlays in the main
+  window rather than separate top-level OS windows.
+- Most visible strings are still English literals; the locale files load and
+  `Localization::format` is available but not every label is routed through it.
+- DNS pinning for expired signed-link hosts, the POT attestation server helper,
+  and Chrome extension auto-staging are not ported.
+- Native folder-picker: folder paths are edited directly in the settings and
+  prompt fields instead of opening a WinRT `FolderPicker`.
+
+These are incremental follow-ups; the bridge protocol, download engine and UI
+are already functional end-to-end (verified with a local HTTP server).

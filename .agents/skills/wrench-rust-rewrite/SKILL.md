@@ -1,14 +1,13 @@
 ---
 name: wrench-rust-rewrite
-description: Work on the Rust + GPUI Kit rewrite of Wrench Downloader in rust-app/. Use when building, running, debugging, or extending the Rust app, the 127.0.0.1:45732 bridge, its Tokio download engine, the GPUI Kit UI, or when porting remaining C# features. Covers exact API gotchas, the end-to-end verification recipe and known parity gaps.
+description: Work on the Rust + GPUI Kit Wrench Downloader at the project root. Use when building, running, debugging, or extending the app, the 127.0.0.1:45732 bridge, its Tokio download engine, or the GPUI Kit UI. Covers exact API gotchas, the end-to-end verification recipe and remaining parity gaps.
 ---
 
 # Wrench Downloader — Rust / GPUI Kit rewrite
 
-The Rust app lives in `rust-app/`. It is a ground-up rewrite of the C# WinUI 3
-app, **not** a wrapper. The original C# app and any uncommitted changes in it
-must be left alone; add new work only under `rust-app/` unless the user says
-otherwise.
+The Rust app is at the project root (`Cargo.toml`, `src/`, `target/`). It is a
+ground-up rewrite of the former WinUI 3 app, **not** a wrapper. The old C# app
+is preserved on the `archive-winui` branch; the main branch is Rust-only.
 
 ## Map
 
@@ -28,7 +27,6 @@ otherwise.
 ## Build / run
 
 ```powershell
-cd rust-app
 cargo build
  Start-Process -FilePath .\target\debug\wrench-downloader.exe -WorkingDirectory (Get-Location) -PassThru
 ```
@@ -38,15 +36,16 @@ cargo build
 
 Dev smoke test with portable data (keeps `%LOCALAPPDATA%` untouched):
 
-1. Create `rust-app/target/portable.mode` and `rust-app/target/Data/settings.json`
-   with `{ "DownloadFolder": "<temp dir>", "ShowDownloadDialog": false,
-   "MaximumConcurrentDownloads": 4 }` (PascalCase keys).
+1. The repo-root `portable.mode` makes the app use `Data/` in the repo. For an
+   isolated test, point `DownloadFolder` in `Data/settings.json` at a temp dir
+   (`{"DownloadFolder":"<temp dir>","ShowDownloadDialog":false,
+   "MaximumConcurrentDownloads":4}` — PascalCase keys).
 2. Start a local file server: `python -m http.server 45799 --bind 127.0.0.1 --directory <serve dir>`.
 3. Start the app, then:
    `Invoke-RestMethod http://127.0.0.1:45732/api/health` → `ok / Wrench Downloader`.
 4. POST `/api/download` with `{url, title, quality:"file", prompt:false}` and
    confirm the file lands in `DownloadFolder`.
-5. Stop app + server, remove `target/portable.mode`.
+5. Stop the app and server; restore `DownloadFolder` afterwards.
 
 ## GPUI Kit API facts learned the hard way (gpui-kit 0.10 / gpui-pre 0.3.12)
 

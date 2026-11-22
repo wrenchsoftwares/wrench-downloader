@@ -64,3 +64,6 @@ history.json
 startup.log
 IDM extension/
 .github/
+
+# Rust build output
+target/

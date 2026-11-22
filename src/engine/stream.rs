@@ -117,11 +117,35 @@ pub(crate) async fn run_ytdlp_streaming(
     let store = store.clone();
     let id = id.to_string();
     let stdout_task = tokio::spawn(async move {
-        use tokio::io::AsyncBufReadExt as _;
-        let mut reader = tokio::io::BufReader::new(stdout).lines();
-        while let Ok(Some(line)) = reader.next_line().await {
-            lines.lock().push(line.clone());
+        use tokio::io::AsyncReadExt as _;
+        // yt-dlp writes progress with carriage returns (overwriting the same
+        // terminal line). Splitting only on '\n' would deliver the whole
+        // progress sequence at the end as one line - hence "stuck, then 100%".
+        let mut reader = stdout;
+        let mut chunk = [0u8; 8192];
+        let mut pending = String::new();
+        let mut first_progress = true;
+        let mut handle_line = |line: &str,
+                           lines: &Arc<parking_lot::Mutex<Vec<String>>>,
+                           store: &DownloadStore,
+                           ui_tx: &UnboundedSender<UiEvent>,
+                           id: &str| {
+            if line.is_empty() { return; }
+            lines.lock().push(line.to_string());
             let lower = line.to_ascii_lowercase();
+
+            if let Some((pct, speed)) = parse_ytdlp_progress(line) {
+                if first_progress {
+                    crate::paths::log_line("first live progress update received");
+                    first_progress = false;
+                }
+                update(store, ui_tx, id, |i| {
+                    i.progress = pct.min(99.0);
+                    i.status_text = format!("{:.1}% downloaded", pct);
+                    if !speed.is_empty() { i.speed_text = speed.clone(); }
+                });
+                return;
+            }
             let phase = if lower.contains("solving js challenges") {
                 Some("Solving JavaScript challenge...")
             } else if lower.contains("extracting url") {
@@ -130,12 +154,28 @@ pub(crate) async fn run_ytdlp_streaming(
                 Some("Reading player formats...")
             } else if lower.contains("downloading manifest") || lower.contains("metadata") {
                 Some("Reading stream metadata...")
+            } else if lower.contains("[merger]") {
+                Some("Merging video and audio...")
             } else {
                 None
             };
             if let Some(phase) = phase {
-                update(&store, &ui_tx, &id, |i| i.status_text = phase.into());
+                update(store, ui_tx, id, |i| i.status_text = phase.into());
             }
+        };
+
+        loop {
+            let n = reader.read(&mut chunk).await.unwrap_or(0);
+            if n == 0 { break; }
+            pending.push_str(&String::from_utf8_lossy(&chunk[..n]));
+            while let Some(pos) = pending.find(['\r', '\n']) {
+                let line: String = pending.drain(..=pos).collect();
+                let line = line.trim_end_matches(['\r', '\n']).to_string();
+                handle_line(&line, &lines, &store, &ui_tx, &id);
+            }
+        }
+        if !pending.trim().is_empty() {
+            handle_line(pending.trim(), &lines, &store, &ui_tx, &id);
         }
     });
 

@@ -144,9 +144,12 @@ Dev smoke test with portable data (keeps `%LOCALAPPDATA%` untouched):
   ~4s; aria2c took ~30s and `-N 16` triggered HTTP 403. Default to plain
   downloads; aria2c is opt-in only. Pass `--ffmpeg-location` when ffmpeg is not
   just `ffmpeg` on PATH.
-- Stream yt-dlp stdout line-by-line (`run_ytdlp_streaming`) instead of
-  `wait_with_output` so the UI shows phases (Solving JS challenge, Reading
-  player formats, ...) rather than freezing on "Extracting stream information".
+- Stream yt-dlp stdout with a **chunk reader split on both `\\r` and `\\n`**
+  (`run_ytdlp_streaming`) instead of `wait_with_output`. yt-dlp progress uses
+  carriage returns; `BufRead::lines()` only splits on `\\n`, so all progress
+  arrives as one line at the end and the UI appears stuck then jumps to 100%.
+  Parse `[download] N%` in the streaming loop and update `item.progress` /
+  `status_text` / `speed_text` immediately (cap progress at 99 until finalize).
 - `paths::log_line` records `yt-dlp start ...` / `yt-dlp attempt N finished in
   Xs` for timing diagnosis.
 - Do **not** pass `--impersonate chrome` unless the installed yt-dlp supports

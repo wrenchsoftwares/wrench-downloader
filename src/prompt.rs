@@ -8,7 +8,7 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::label::Label;
-use gpui_kit::component::{ActiveTheme, Disableable};
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::*;
 
 pub struct PromptView {

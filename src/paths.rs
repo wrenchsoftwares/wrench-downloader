@@ -8,7 +8,6 @@ pub struct Paths {
     pub package_dir: PathBuf,
     pub data_dir: PathBuf,
     pub exe_dir: PathBuf,
-    pub portable: bool,
 }
 
 static PATHS: OnceLock<Paths> = OnceLock::new();
@@ -50,7 +49,6 @@ impl Paths {
                 package_dir,
                 data_dir,
                 exe_dir,
-                portable,
             }
         })
     }
@@ -63,7 +61,6 @@ impl Paths {
     pub fn settings(&self) -> PathBuf { self.data_dir.join("settings.json") }
     pub fn startup_log(&self) -> PathBuf { self.data_dir.join("startup.log") }
     pub fn parts(&self) -> PathBuf { self.data_dir.join("Parts") }
-    pub fn torrent_cache(&self) -> PathBuf { self.data_dir.join("torrent-cache") }
 
     /// Locate a shipped folder next to the package root or the binary.
     pub fn resource(&self, name: &str) -> PathBuf {

@@ -88,10 +88,6 @@ impl AppView {
                 model::save_history(&self.snapshot_items());
                 cx.notify();
             }
-            UiEvent::BridgeHealth(ok) => {
-                self.status = if ok { "Chrome Companion connected".into() } else { "Chrome Companion not detected".into() };
-                cx.notify();
-            }
             UiEvent::BridgeDownload { item, prompt } => {
                 let should_prompt = prompt && self.runtime.settings.lock().show_download_dialog;
                 if should_prompt {
@@ -183,17 +179,6 @@ impl AppView {
         std::process::Command::new("explorer.exe").arg(&folder).spawn().ok();
         #[cfg(not(target_os = "windows"))]
         { let _ = folder; }
-    }
-
-    fn open_file(&mut self, path: &str) {
-        if path.is_empty() || !std::path::Path::new(path).exists() {
-            self.status.clone_from(&"File not available".to_string());
-            return;
-        }
-        #[cfg(target_os = "windows")]
-        std::process::Command::new("explorer.exe").arg(&path).spawn().ok();
-        #[cfg(not(target_os = "windows"))]
-        { let _ = path; }
     }
 
     fn save_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -420,7 +405,7 @@ impl AppView {
                     .child(Label::new("3. Choose “Load unpacked” and select the shipped extension folder").text_sm())
                     .child(Label::new("4. Pin the extension so the download badge is always visible").text_sm())
                     .child(Button::new("show-extension-folder").label("Show extension folder")
-                        .on_click(cx.listener(|this, _, _, _| {
+                        .on_click(cx.listener(|_, _, _, _| {
                             let path = crate::paths::Paths::get().resource("chrome extension");
                             #[cfg(target_os = "windows")] { std::process::Command::new("explorer.exe").arg(path).spawn().ok(); }
                             #[cfg(not(target_os = "windows"))] { let _ = path; }

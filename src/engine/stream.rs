@@ -390,7 +390,7 @@ pub async fn ytdlp_download(
     id: &str,
     item: DownloadItem,
 ) -> anyhow::Result<String> {
-    let (ytdlp, ffmpeg, aria) = tools();
+    let (ytdlp, ffmpeg, _aria) = tools();
     let token = item.token.clone();
     let settings = settings_ref.lock().clone();
     let title = {

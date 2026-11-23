@@ -15,7 +15,10 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 pub type SharedItem = Arc<Mutex<DownloadItem>>;
 
+/// Engine → UI notifications. Some payloads are kept for the wire protocol
+/// and some variants are only constructed by the release-only tray module.
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub enum UiEvent {
     BridgeDownload { item: DownloadItem, prompt: bool },
     DownloadsChanged,
@@ -24,7 +27,6 @@ pub enum UiEvent {
     QueuePaused(bool),
     Completed(String),
     Failed(String),
-    BridgeHealth(bool),
     TorrentFiles {
         id: String,
         name: String,
@@ -42,13 +44,11 @@ pub enum EngineCommand {
     Remove(String),
     SetQueuePaused(bool),
     TorrentFiles { id: String, files: Vec<String> },
-    Shutdown,
 }
 
 #[derive(Clone)]
 pub struct EngineHandle {
     pub tx: UnboundedSender<EngineCommand>,
-    pub store: DownloadStore,
 }
 
 impl EngineHandle {
@@ -56,7 +56,6 @@ impl EngineHandle {
     pub fn pause(&self, id: &str) { let _ = self.tx.send(EngineCommand::Pause(id.to_string())); }
     pub fn resume(&self, id: &str) { let _ = self.tx.send(EngineCommand::Resume(id.to_string())); }
     pub fn set_queue_paused(&self, paused: bool) { let _ = self.tx.send(EngineCommand::SetQueuePaused(paused)); }
-    pub fn shutdown(&self) { let _ = self.tx.send(EngineCommand::Shutdown); }
 }
 
 #[derive(Clone, Default)]
@@ -79,8 +78,6 @@ impl DownloadStore {
         if let Some(pos) = list.iter().position(|i| i.lock().id == id) { list.remove(pos); }
     }
     pub fn list(&self) -> Vec<SharedItem> { self.items.read().clone() }
-    pub fn len(&self) -> usize { self.items.read().len() }
-    pub fn clear(&self) { self.items.write().clear(); }
 }
 
 fn update(store: &DownloadStore, ui: &UnboundedSender<UiEvent>, id: &str, f: impl FnOnce(&mut DownloadItem)) {
@@ -98,7 +95,7 @@ pub fn spawn_engine(
     bridge_rx: UnboundedReceiver<BridgeRequest>,
 ) -> EngineHandle {
     let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::unbounded_channel::<EngineCommand>();
-    let handle = EngineHandle { tx: cmd_tx, store: store.clone() };
+    let handle = EngineHandle { tx: cmd_tx };
     let runtime = runtime.handle().clone();
 
     let ui_bridge = ui_tx.clone();
@@ -190,7 +187,7 @@ pub fn spawn_engine(
                     let _ = ui_tx.send(UiEvent::Status(if paused { "Queue paused".into() } else { "Queue started".into() }));
                     if !paused {
                         for item in store.list() {
-                            let mut g = item.lock();
+                            let g = item.lock();
                             if g.status == DownloadStatus::Paused && g.queue_name == "Main queue" && !g.wait_for_queue_start {
                                 let id = g.id.clone();
                                 drop(g);
@@ -206,7 +203,6 @@ pub fn spawn_engine(
                 EngineCommand::TorrentFiles { id, files } => {
                     torrent::confirm_files(&store, &settings, &ui_tx, &id, files);
                 }
-                EngineCommand::Shutdown => break,
             }
             let _ = queue_paused;
         }

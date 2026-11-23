@@ -21,19 +21,12 @@ pub struct TorrentFile {
 #[derive(Clone)]
 struct Session {
     magnet: String,
-    torrent: PathBuf,
     files: Vec<TorrentFile>,
-    name: String,
 }
 
 static SESSIONS: OnceLock<Mutex<HashMap<String, Session>>> = OnceLock::new();
 fn sessions() -> &'static Mutex<HashMap<String, Session>> {
     SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-pub fn is_torrent_link(url: &str) -> bool {
-    let l = url.to_ascii_lowercase();
-    l.starts_with("magnet:") || l.ends_with(".torrent")
 }
 
 // ---------------------------------------------------------------------------
@@ -167,7 +160,7 @@ pub async fn download(
         anyhow::bail!("could not resolve torrent metadata");
     }
     let (name, files) = parse_torrent(&torrent_file)?;
-    sessions().lock().insert(id.to_string(), Session { magnet, torrent: torrent_file, files: files.clone(), name: name.clone() });
+    sessions().lock().insert(id.to_string(), Session { magnet, files: files.clone() });
     update(store, ui, id, |i| { i.title = name.clone(); i.status_text = "Waiting for file selection".into(); });
     let _ = ui.send(UiEvent::TorrentFiles {
         id: id.to_string(),
@@ -175,10 +168,6 @@ pub async fn download(
         files: files.iter().map(|f| (f.path.clone(), f.length)).collect(),
     });
     Ok(String::new())
-}
-
-pub fn selected_files(id: &str) -> Vec<TorrentFile> {
-    sessions().lock().get(id).map(|s| s.files.clone()).unwrap_or_default()
 }
 
 pub fn confirm_files(

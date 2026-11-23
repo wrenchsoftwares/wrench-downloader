@@ -21,7 +21,6 @@ pub enum DownloadStatus {
 
 impl DownloadStatus {
     pub fn is_active(self) -> bool { matches!(self, Self::Downloading | Self::Queued) }
-    pub fn can_toggle_pause(self) -> bool { self != Self::Completed }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -161,12 +160,6 @@ impl DownloadItem {
 
     pub fn action_glyph(&self) -> &'static str {
         if self.status.is_active() { "⏸" } else { "▶" }
-    }
-
-    pub fn added_text(&self) -> String {
-        chrono::DateTime::parse_from_rfc3339(&self.created_at)
-            .map(|d| format!("Added {}", d.format("%Y-%m-%d %H:%M")))
-            .unwrap_or_else(|_| "Added".to_string())
     }
 }
 

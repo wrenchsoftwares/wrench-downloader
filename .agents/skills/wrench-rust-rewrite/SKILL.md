@@ -201,7 +201,7 @@ Dev smoke test with portable data (keeps `%LOCALAPPDATA%` untouched):
 - The companion extension checks `/api/health`; when offline it offers a
   "Start Wrench Downloader" button and tries `wrench://launch`. The installer
   registers the `wrench:` protocol to the app exe.
-- Icons: `Assets/AppIcon.ico` is generated from `logo.png` (16–256 px). It is
+- Icons: `Assets/AppIcon.ico` is generated from `Assets/logo-source.png` (16–256 px). It is
   staged as `app.ico`, used for the Start/desktop shortcuts (`IconFilename`),
   the tray icon, and the window/taskbar icons via `WM_SETICON` on the main HWND.
 - Verified: sending WM_CLOSE leaves the process alive with the window hidden;

@@ -1601,10 +1601,8 @@
     menu._video = video;
 
     // Fresh DOM read at click time: players rewrite <video src>/<source>
-    // after init, so the scan-time snapshot may already be stale.
-    try { sniffVideoSources(video); } catch (e) {}
-
-    // Fresh sniff at click time without modifying playback or muting
+    // after init, so the scan-time snapshot may already be stale. Reading
+    // sources does not modify playback or mute the video.
     try { sniffVideoSources(video); } catch (e) {}
 
     const header = document.createElement("div");

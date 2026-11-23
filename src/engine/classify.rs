@@ -1,5 +1,4 @@
 //! Structural URL classification — no per-site branches or site lists.
-use crate::model::DownloadItem;
 use url::Url;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,8 +18,21 @@ fn query_keys(u: &Url) -> std::collections::HashSet<String> {
 }
 
 fn has_manifest_marker(l: &str) -> bool {
-    [".m3u8", ".mpd", ".m3u", "hls_playlist", "hls_variant", "/manifest/", "/master", "/playlist"]
+    [".m3u8", ".mpd", ".m3u", "hls_playlist", "hls_variant", "/manifest/"]
         .iter().any(|m| l.contains(m))
+        || manifest_leaf(l)
+}
+
+/// Extension-less HLS/DASH masters put `master` or `playlist` in the **final**
+/// path segment (e.g. `/master?token=...`). A branch named `master` in the
+/// middle of a path (`/master/README.md`, `/playlist/foo.mp4`) is an ordinary
+/// file and must not be routed to the manifest/yt-dlp path.
+fn manifest_leaf(url: &str) -> bool {
+    let Ok(u) = Url::parse(url) else { return false };
+    let path = u.path().trim_end_matches('/').to_ascii_lowercase();
+    let leaf = path.rsplit('/').next().unwrap_or("");
+    leaf == "master" || leaf == "playlist"
+        || leaf.starts_with("master.") || leaf.starts_with("playlist.")
 }
 
 pub fn classify(url: &str, quality: &str) -> UrlKind {
@@ -62,11 +74,6 @@ pub fn classify(url: &str, quality: &str) -> UrlKind {
     UrlKind::Direct
 }
 
-pub fn is_manifest_url(url: &str) -> bool {
-    let l = lower(url);
-    has_manifest_marker(&l) || l.contains("videoplayback")
-}
-
 pub fn is_captured_playback(url: &str) -> bool {
     let Ok(u) = Url::parse(url) else { return false };
     let path = u.path();
@@ -78,14 +85,6 @@ pub fn is_captured_playback(url: &str) -> bool {
 pub fn is_sabr_redirector(url: &str) -> bool {
     let Ok(u) = Url::parse(url) else { return false };
     u.path().ends_with("/videoplayback") && query_keys(&u).contains("aitags")
-}
-
-pub fn is_extension_resolved(item: &DownloadItem) -> bool {
-    is_captured_playback(&item.url) && !matches!(item.quality.as_str(), "file" | "audio")
-}
-
-pub fn is_progressive_itag(itag: i32) -> bool {
-    matches!(itag, 17 | 18 | 36 | 43 | 22)
 }
 
 /// Signed URLs die: detect expiry windows with a 60-second grace period.
@@ -112,5 +111,42 @@ pub fn quality_selector(quality: &str) -> String {
             let h: i32 = other.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap_or(1080);
             format!("bv*[height<={h}][ext=mp4]+ba[ext=m4a]/b[height<={h}][ext=mp4]/bv*[height<={h}]+ba/b[height<={h}]")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn branch_named_master_is_a_direct_file() {
+        // Regression: "/master" anywhere in the URL used to mean HLS master,
+        // so a file on a repo's master branch was routed to yt-dlp and failed.
+        assert_eq!(
+            classify("https://raw.githubusercontent.com/git/git/master/README.md", "file"),
+            UrlKind::Direct
+        );
+        assert_eq!(
+            classify("https://example.com/master/files/report.pdf", "best"),
+            UrlKind::Direct
+        );
+        assert_eq!(
+            classify("https://example.com/playlist/intro.mp4", "best"),
+            UrlKind::Direct
+        );
+    }
+
+    #[test]
+    fn real_manifest_urls_are_still_detected() {
+        assert_eq!(classify("https://example.com/hls/master.m3u8", "best"), UrlKind::Manifest);
+        assert_eq!(classify("https://example.com/hls/MASTER.MPD", "best"), UrlKind::Manifest);
+        assert_eq!(classify("https://example.com/master?token=abc", "best"), UrlKind::Manifest);
+        assert_eq!(classify("https://example.com/live/playlist/", "best"), UrlKind::Manifest);
+    }
+
+    #[test]
+    fn pages_and_extensionless_urls_go_to_ytdlp() {
+        assert_eq!(classify("https://www.youtube.com/watch?v=abc", "best"), UrlKind::Page);
+        assert_eq!(classify("https://example.com/video/123", "best"), UrlKind::Page);
     }
 }

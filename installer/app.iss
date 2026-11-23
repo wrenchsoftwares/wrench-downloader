@@ -1,14 +1,14 @@
-; Wrench Downloader 26.4.3 - Inno Setup 6 installer (Rust / GPUI Kit build).
+; Wrench Downloader 26.4.4 - Inno Setup 6 installer (Rust / GPUI Kit build).
 ;
 ; Stage first:
-;   artifacts\stage\26.4.3\wrench-downloader.exe
-;   artifacts\stage\26.4.3\Languages\*.json
-;   artifacts\stage\26.4.3\chrome extension\*
+;   artifacts\stage\26.4.4\wrench-downloader.exe
+;   artifacts\stage\26.4.4\Languages\*.json
+;   artifacts\stage\26.4.4\chrome extension\*
 ; Then compile:
-;   ISCC.exe /DMyAppVersion=26.4.3 installer\app.iss
+;   ISCC.exe /DMyAppVersion=26.4.4 installer\app.iss
 
 #ifndef MyAppVersion
-  #define MyAppVersion "26.4.3"
+  #define MyAppVersion "26.4.4"
 #endif
 #define MyAppName "Wrench Downloader"
 #define MyAppExe "wrench-downloader.exe"

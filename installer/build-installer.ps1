@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$version = "26.4.3"
+$version = "26.4.4"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $root
 

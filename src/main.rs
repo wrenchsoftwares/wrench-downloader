@@ -70,6 +70,24 @@ fn main() -> anyhow::Result<()> {
         ui_tx: ui_tx.clone(),
     };
 
+    // Restore the window where the user last left it (position, size and
+    // maximized state). The tray captures these on size/move and on close.
+    let win = app_runtime.settings.lock().clone();
+    let saved_window_bounds = {
+        let bounds = Bounds {
+            origin: Point { x: px(win.window_x as f32), y: px(win.window_y as f32) },
+            size: Size {
+                width: px(win.window_width as f32),
+                height: px(win.window_height as f32),
+            },
+        };
+        if win.window_maximized {
+            WindowBounds::Maximized(bounds)
+        } else {
+            WindowBounds::Windowed(bounds)
+        }
+    };
+
     gpui_kit::application()
         .with_assets(gpui_kit::assets::Assets)
         .run(move |cx| {
@@ -77,10 +95,7 @@ fn main() -> anyhow::Result<()> {
 
         gpui_kit::open_window(
             WindowOptions {
-                window_bounds: Some(WindowBounds::Maximized(Bounds {
-                    origin: Point { x: px(80.0), y: px(80.0) },
-                    size: Size { width: px(1280.0), height: px(800.0) },
-                })),
+                window_bounds: Some(saved_window_bounds),
                 focus: !background,
                 show: !background,
                 ..Default::default()
@@ -119,7 +134,7 @@ fn main() -> anyhow::Result<()> {
 
         // Release builds minimize to tray on close and expose a tray menu.
         #[cfg(not(debug_assertions))]
-        platform::start_tray(ui_tx.clone());
+        platform::start_tray(ui_tx.clone(), app_runtime.settings.clone());
     });
 
     Ok(())

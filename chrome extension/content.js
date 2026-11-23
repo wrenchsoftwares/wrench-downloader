@@ -382,6 +382,10 @@
       btn.style.top = `${Math.max(0, top)}px`;
       btn.style.left = `${Math.max(0, left)}px`;
       btn.style.display = "flex";
+      // The button follows the video on scroll/resize; keep an open menu with it.
+      if (currentOpenMenu && currentOpenMenu._btn === btn) {
+        positionDropdownMenu(currentOpenMenu, btn);
+      }
     }
 
     window.addEventListener("scroll", updatePosition, { passive: true });
@@ -1612,17 +1616,43 @@
 
     document.body.appendChild(menu);
     currentOpenMenu = menu;
+    positionDropdownMenu(menu, btn);
+  }
 
-    const btnRect = btn.getBoundingClientRect();
-    const menuTop = window.scrollY + btnRect.bottom + 6;
-    const menuLeft = window.scrollX + Math.min(window.innerWidth - 360, Math.max(10, btnRect.right - 350));
-    menu.style.top = `${menuTop}px`;
-    menu.style.left = `${Math.max(10, menuLeft)}px`;
+  // Keep the menu anchored to the button and fully inside the viewport. It is
+  // position:fixed, so these are viewport coordinates (no scroll offsets) and
+  // the real measured size is used instead of hard-coded width guesses.
+  function positionDropdownMenu(menu, btn) {
+    if (!menu || !btn || !btn.isConnected) return;
+    const rect = btn.getBoundingClientRect();
+    const gap = 6;
+    const margin = 10;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const mh = menu.offsetHeight;
+    const mw = menu.offsetWidth;
+
+    let top = rect.bottom + gap;
+    // Flip above the button when there isn't room below.
+    if (top + mh > vh - margin && rect.top - gap - mh >= margin) {
+      top = rect.top - gap - mh;
+    }
+    top = Math.max(margin, Math.min(top, vh - mh - margin));
+
+    // Right-align with the button, then clamp both edges so no item is pushed
+    // off-screen (which used to require scrolling right to read it).
+    let left = rect.right - mw;
+    left = Math.max(margin, Math.min(left, vw - mw - margin));
+
+    menu.style.top = `${Math.round(top)}px`;
+    menu.style.left = `${Math.round(left)}px`;
   }
 
   async function refreshOpenDropdown(video, btn) {
     if (!currentOpenMenu) return;
     await populateDropdownItems(currentOpenMenu, video, btn);
+    // Item count (and therefore menu height) can change on refresh.
+    positionDropdownMenu(currentOpenMenu, btn);
   }
 
   // Coalesce bursts of capture/metadata events into one refresh. Without

@@ -76,20 +76,24 @@ fn title_from_url(url: &str) -> String {
 mod tray {
     use super::*;
     use std::ffi::c_void;
-    use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering};
     use std::sync::OnceLock;
 
     type Hwnd = isize;
     type WndProc = unsafe extern "system" fn(Hwnd, u32, usize, isize) -> isize;
 
+    const WM_SIZE: u32 = 0x0005;
     const WM_CLOSE: u32 = 0x0010;
     const WM_DESTROY: u32 = 0x0002;
+    const WM_WINDOWPOSCHANGED: u32 = 0x0047;
     const WM_LBUTTONUP: u32 = 0x0202;
     const WM_LBUTTONDBLCLK: u32 = 0x0203;
     const WM_RBUTTONUP: u32 = 0x0205;
     const WM_USER: u32 = 0x0400;
     const WM_TRAYICON: u32 = WM_USER + 1;
     const SW_HIDE: isize = 0;
+    const SW_SHOWMAXIMIZED: u32 = 3; // WINDOWPLACEMENT.showCmd
+    const SW_MAXIMIZE: isize = 3;    // ShowWindow command
     const SW_RESTORE: isize = 9;
     const NIM_ADD: u32 = 0;
     const NIM_DELETE: u32 = 2;
@@ -107,6 +111,8 @@ mod tray {
     static ORIGINAL_PROC: AtomicIsize = AtomicIsize::new(0);
     pub(crate) static TRAY_TX: OnceLock<UnboundedSender<UiEvent>> = OnceLock::new();
     static MUTEX_HANDLE: OnceLock<isize> = OnceLock::new();
+    static WINDOW_SETTINGS: OnceLock<Arc<Mutex<Settings>>> = OnceLock::new();
+    static LAST_WINDOW_SAVE_MS: AtomicU64 = AtomicU64::new(0);
 
     /// False when another instance already owns the single-instance mutex.
     pub(crate) fn is_first_instance() -> bool {
@@ -119,13 +125,82 @@ mod tray {
         }
     }
 
-    /// Bring an already-running (possibly tray-hidden) instance to the front.
+    fn saved_maximized() -> bool {
+        if let Some(settings) = WINDOW_SETTINGS.get() {
+            return settings.lock().window_maximized;
+        }
+        crate::model::Settings::load().window_maximized
+    }
+
+    fn show_command() -> isize {
+        if saved_maximized() { SW_MAXIMIZE } else { SW_RESTORE }
+    }
+
+    fn now_ms() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
+    }
+
+    /// Persist the window's normal rect and maximized state so startup and
+    /// tray opens restore exactly how the user left it.
+    unsafe fn capture_window_state(hwnd: Hwnd, force: bool) {
+        let Some(settings) = WINDOW_SETTINGS.get() else { return; };
+        let visible = IsWindowVisible(hwnd) != 0;
+        if !visible && !force { return; }
+        let mut placement = WindowPlacement {
+            length: std::mem::size_of::<WindowPlacement>() as u32,
+            ..Default::default()
+        };
+        if GetWindowPlacement(hwnd, &mut placement) == 0 { return; }
+        // Win32 reports physical pixels; GPUI's WindowBounds uses logical
+        // pixels. Convert with the window's DPI so the restore size/position
+        // is correct on scaled displays.
+        let dpi = GetDpiForWindow(hwnd);
+        let scale = if dpi > 0 { dpi as f32 / 96.0 } else { 1.0 };
+        let to_logical = |v: i32| (v as f32 / scale).round() as i32;
+        let r = placement.normal_position;
+        let x = to_logical(r.left);
+        let y = to_logical(r.top);
+        let width = to_logical(r.right - r.left);
+        let height = to_logical(r.bottom - r.top);
+        if width <= 0 || height <= 0 { return; }
+        let now = now_ms();
+        // Size/move messages fire rapidly while dragging; coalesce the writes.
+        if !force && now.saturating_sub(LAST_WINDOW_SAVE_MS.load(Ordering::Relaxed)) < 1000 {
+            return;
+        }
+        let mut s = settings.lock();
+        // A hidden window reports showCmd = SW_HIDE; keep the last known
+        // maximized flag instead of corrupting it.
+        let maximized = if visible {
+            placement.show_cmd == SW_SHOWMAXIMIZED
+        } else {
+            s.window_maximized
+        };
+        if s.window_x == x && s.window_y == y && s.window_width == width
+            && s.window_height == height && s.window_maximized == maximized {
+            return;
+        }
+        s.window_x = x;
+        s.window_y = y;
+        s.window_width = width;
+        s.window_height = height;
+        s.window_maximized = maximized;
+        s.save();
+        drop(s);
+        LAST_WINDOW_SAVE_MS.store(now, Ordering::Relaxed);
+    }
+
+    /// Bring an already-running (possibly tray-hidden) instance to the front,
+    /// restoring the saved maximized state instead of always un-maximizing.
     pub(crate) fn focus_existing() -> bool {
         unsafe {
             let title = "Wrench Downloader\0".encode_utf16().collect::<Vec<_>>();
             let hwnd = FindWindowW(std::ptr::null(), title.as_ptr());
             if hwnd == 0 { return false; }
-            ShowWindow(hwnd, SW_RESTORE);
+            ShowWindow(hwnd, show_command());
             SetForegroundWindow(hwnd);
             true
         }
@@ -153,6 +228,16 @@ mod tray {
     #[repr(C)]
     #[derive(Default)]
     struct Rect { left: i32, top: i32, right: i32, bottom: i32 }
+    #[repr(C)]
+    #[derive(Default)]
+    struct WindowPlacement {
+        length: u32,
+        flags: u32,
+        show_cmd: u32,
+        min_position: Point,
+        max_position: Point,
+        normal_position: Rect,
+    }
     #[repr(C)]
     #[derive(Default)]
     struct Msg {
@@ -220,6 +305,8 @@ mod tray {
         fn SetForegroundWindow(hWnd: Hwnd) -> i32;
         fn IsWindowVisible(hWnd: Hwnd) -> i32;
         fn GetWindowRect(hWnd: Hwnd, lpRect: *mut Rect) -> i32;
+        fn GetWindowPlacement(hWnd: Hwnd, lpWndPl: *mut WindowPlacement) -> i32;
+        fn GetDpiForWindow(hWnd: Hwnd) -> u32;
         fn EnumWindows(lpEnumFunc: unsafe extern "system" fn(Hwnd, isize) -> i32, lParam: isize) -> i32;
         fn GetWindowThreadProcessId(hWnd: Hwnd, lpdwProcessId: *mut u32) -> u32;
         fn SetWindowLongPtrW(hWnd: Hwnd, nIndex: i32, dwNewLong: isize) -> isize;
@@ -265,7 +352,12 @@ mod tray {
     }
 
     unsafe extern "system" fn main_subclass_proc(hwnd: Hwnd, msg: u32, wp: usize, lp: isize) -> isize {
+        if msg == WM_SIZE || msg == WM_WINDOWPOSCHANGED {
+            capture_window_state(hwnd, false);
+        }
         if msg == WM_CLOSE && !EXITING.load(Ordering::Relaxed) {
+            // Save the final placement before hiding to the tray.
+            capture_window_state(hwnd, true);
             // "Close" minimizes to the tray instead of quitting.
             ShowWindow(hwnd, SW_HIDE);
             return 0;
@@ -277,12 +369,13 @@ mod tray {
     fn tray_action(action: isize) {
         let hwnd = FOUND_HWND.load(Ordering::Relaxed);
         match action {
-            1001 => { unsafe { ShowWindow(hwnd, SW_RESTORE); SetForegroundWindow(hwnd); } }
+            1001 => { unsafe { ShowWindow(hwnd, show_command()); SetForegroundWindow(hwnd); } }
             1002 => {
-                unsafe { ShowWindow(hwnd, SW_RESTORE); SetForegroundWindow(hwnd); }
+                unsafe { ShowWindow(hwnd, show_command()); SetForegroundWindow(hwnd); }
                 if let Some(tx) = TRAY_TX.get() { let _ = tx.send(UiEvent::TraySettings); }
             }
             1003 => {
+                unsafe { capture_window_state(hwnd, true); }
                 EXITING.store(true, Ordering::Relaxed);
                 if let Some(tx) = TRAY_TX.get() { let _ = tx.send(UiEvent::TrayExit); }
             }
@@ -322,7 +415,8 @@ mod tray {
         }
     }
 
-    pub(crate) unsafe fn run_tray() {
+    pub(crate) unsafe fn run_tray(settings: Arc<Mutex<Settings>>) {
+        let _ = WINDOW_SETTINGS.set(settings);
         TARGET_PID.store(GetCurrentProcessId(), Ordering::Relaxed);
         for _ in 0..30 {
             EnumWindows(enum_windows_proc, 0);
@@ -391,12 +485,12 @@ pub fn focus_existing() -> bool {
 }
 
 /// Start the release-only system tray. Debug builds intentionally have no tray.
-pub fn start_tray(ui: UnboundedSender<UiEvent>) {
+pub fn start_tray(ui: UnboundedSender<UiEvent>, settings: Arc<Mutex<Settings>>) {
     #[cfg(target_os = "windows")]
     {
         let _ = tray::TRAY_TX.set(ui);
-        std::thread::spawn(|| unsafe { tray::run_tray() });
+        std::thread::spawn(move || unsafe { tray::run_tray(settings) });
     }
     #[cfg(not(target_os = "windows"))]
-    { let _ = ui; }
+    { let _ = (ui, settings); }
 }

@@ -33,15 +33,19 @@
 }
 
 .wrench-dropdown-menu {
-  position: absolute;
+  /* Viewport-relative placement (set in JS from getBoundingClientRect) so the
+     menu stays beside the button instead of drifting with page scroll. */
+  position: fixed;
   z-index: 2147483647;
   background: #18191c;
   border: 1px solid #333842;
   border-radius: 8px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7);
-  min-width: 380px;
-  max-width: 560px;
-  max-height: 420px;
+  box-sizing: border-box;
+  width: max-content;
+  min-width: min(260px, calc(100vw - 20px));
+  max-width: min(420px, calc(100vw - 20px));
+  max-height: min(420px, calc(100vh - 20px));
   overflow-y: auto;
   overflow-x: hidden;
   padding: 6px 0;
@@ -99,7 +103,10 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  flex: 1;
+  flex: 1 1 auto;
+  /* Without this, the nowrap title/badge min-content width can push rows
+     wider than the menu and clip text behind overflow-x: hidden. */
+  min-width: 0;
 }
 
 .wrench-item-title {
@@ -125,6 +132,7 @@
 }
 
 .wrench-item-badge {
+  flex: 0 0 auto;
   font-size: 10px;
   font-weight: 700;
   background: rgba(255, 255, 255, 0.12);

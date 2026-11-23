@@ -204,6 +204,13 @@ pub struct Settings {
     pub confirm_on_delete_file: bool,
     pub auto_resume_interrupted: bool,
     pub auto_retry_count: i32,
+    // Last known main-window placement, persisted so tray/startup opens
+    // restore the same position, size and maximized state.
+    pub window_x: i32,
+    pub window_y: i32,
+    pub window_width: i32,
+    pub window_height: i32,
+    pub window_maximized: bool,
 }
 
 impl Default for Settings {
@@ -225,6 +232,11 @@ impl Default for Settings {
             confirm_on_delete_file: true,
             auto_resume_interrupted: false,
             auto_retry_count: 2,
+            window_x: 80,
+            window_y: 80,
+            window_width: 1280,
+            window_height: 800,
+            window_maximized: true,
         }
     }
 }
@@ -257,6 +269,18 @@ impl Settings {
         if !["system", "light", "dark"].contains(&self.app_theme.as_str()) { self.app_theme = "system".into(); }
         if !Path::new(&self.download_folder).is_dir() {
             self.download_folder = default_download_folder();
+        }
+        if self.window_width < 320 || self.window_height < 240
+            || self.window_width > 10000 || self.window_height > 10000 {
+            self.window_width = 1280;
+            self.window_height = 800;
+        }
+        // Negative coordinates are valid on multi-monitor setups (monitor left
+        // of the primary); only reject clearly corrupt values.
+        if self.window_x < -8000 || self.window_x > 20000
+            || self.window_y < -8000 || self.window_y > 20000 {
+            self.window_x = 80;
+            self.window_y = 80;
         }
     }
 }

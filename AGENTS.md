@@ -36,7 +36,15 @@
 - Signed links die: fail fast with a replay hint, never retry proven-dead
   URLs with another downloader.
 
-## 4. Build & test discipline
+## 4. Release branches are immutable
+- A GitHub version branch (for example `26.4.1`) is created **at release time**
+  and must not be touched afterwards: no commits, no pushes, no force updates.
+- All post-release work goes to `main`. When it is time to ship, create a
+  **new** version branch from `main`.
+- If a shipped artifact needs a fix, publish it as a new version instead of
+  modifying the old branch/tag.
+
+## 5. Build & test discipline
 - Rust + GPUI Kit at the repo root: `cargo build` / `cargo build --release`.
   Stop the running app first (it locks the exe on Windows).
 - After extension changes: reload in `chrome://extensions` AND refresh open

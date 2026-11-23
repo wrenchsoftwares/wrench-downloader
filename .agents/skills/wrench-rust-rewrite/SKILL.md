@@ -174,6 +174,15 @@ Dev smoke test with portable data (keeps `%LOCALAPPDATA%` untouched):
   an implicit id. Give labels inside repeated download cards explicit per-item
   `ElementId`s.
 
+## Release branches
+
+- A version branch (e.g. `26.4.1`) is a **released snapshot**. Once created,
+  never commit, push, merge into, or force-update it.
+- Do all post-release work on `main`. Ship by creating a **new** version branch
+  from `main` and a matching release/tag.
+- Pushing a later commit to an old version branch or force-moving its tag is a
+  mistake — ask before doing either.
+
 ## Tray / startup (release builds)
 
 - `platform::start_tray` is compiled only in release (`#[cfg(not(debug_assertions))]`).

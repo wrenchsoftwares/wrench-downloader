@@ -364,7 +364,21 @@ impl AppView {
         let tab = self.settings_tab;
         let mut content = div().flex().flex_col().flex_1().gap_3().p_4();
         match tab {
+            // 0: Behavior (general) -> 1: Downloads -> 2: Appearance -> 3: Browser integration
             0 => {
+                content = content
+                    .child(self.toggle("Minimize to system tray when closing", self.settings_draft.close_to_tray,
+                        |v, this| this.settings_draft.close_to_tray = v, cx))
+                    .child(self.toggle("Show completion dialog", self.settings_draft.show_complete_dialog,
+                        |v, this| this.settings_draft.show_complete_dialog = v, cx))
+                    .child(self.toggle("Play a sound on completion", self.settings_draft.play_sound_on_complete,
+                        |v, this| this.settings_draft.play_sound_on_complete = v, cx))
+                    .child(self.toggle("Confirm before deleting files", self.settings_draft.confirm_on_delete_file,
+                        |v, this| this.settings_draft.confirm_on_delete_file = v, cx))
+                    .child(self.toggle("Automatically resume interrupted downloads", self.settings_draft.auto_resume_interrupted,
+                        |v, this| this.settings_draft.auto_resume_interrupted = v, cx));
+            }
+            1 => {
                 content = content
                     .child(Label::new("Download location"))
                     .child(Input::new(&self.settings_folder))
@@ -385,20 +399,16 @@ impl AppView {
                     .child(self.toggle("Organize downloads into folders by type", self.settings_draft.organize_downloads_by_type,
                         |v, this| this.settings_draft.organize_downloads_by_type = v, cx));
             }
-            1 => {
-                content = content
-                    .child(self.toggle("Minimize to system tray when closing", self.settings_draft.close_to_tray,
-                        |v, this| this.settings_draft.close_to_tray = v, cx))
-                    .child(self.toggle("Show completion dialog", self.settings_draft.show_complete_dialog,
-                        |v, this| this.settings_draft.show_complete_dialog = v, cx))
-                    .child(self.toggle("Play a sound on completion", self.settings_draft.play_sound_on_complete,
-                        |v, this| this.settings_draft.play_sound_on_complete = v, cx))
-                    .child(self.toggle("Confirm before deleting files", self.settings_draft.confirm_on_delete_file,
-                        |v, this| this.settings_draft.confirm_on_delete_file = v, cx))
-                    .child(self.toggle("Automatically resume interrupted downloads", self.settings_draft.auto_resume_interrupted,
-                        |v, this| this.settings_draft.auto_resume_interrupted = v, cx));
-            }
             2 => {
+                content = content
+                    .child(self.choices("Display mode", &["system", "light", "dark"], &self.settings_draft.app_theme.clone(),
+                        |v, this| this.settings_draft.app_theme = v.to_string(), cx))
+                    .child(self.choices_named("Language", &[
+                        ("en", "English"), ("fr", "Français"), ("ar", "العربية"),
+                    ], &self.settings_draft.language.clone(),
+                        |v, this| this.settings_draft.language = v.to_string(), cx));
+            }
+            _ => {
                 content = content
                     .child(Label::new("Browser integration"))
                     .child(Label::new("1. Open chrome://extensions in your browser").text_sm())
@@ -427,17 +437,10 @@ impl AppView {
                             cx.notify();
                         })));
             }
-            _ => {
-                content = content
-                    .child(self.choices("Display mode", &["system", "light", "dark"], &self.settings_draft.app_theme.clone(),
-                        |v, this| this.settings_draft.app_theme = v.to_string(), cx))
-                    .child(self.choices("Language", &["en", "fr", "ar"], &self.settings_draft.language.clone(),
-                        |v, this| this.settings_draft.language = v.to_string(), cx));
-            }
         }
         // Categories are a real selectable list on the left; only the content
         // pane changes, so Save/Cancel stay in a stable footer.
-        let tabs = ["Downloads", "Behavior", "Browser integration", "Appearance"];
+        let tabs = ["Behavior", "Downloads", "Appearance", "Browser integration"];
         let weak = cx.entity().downgrade();
         let mut tab_list = div().flex().flex_col().gap_1();
         for (i, name) in tabs.iter().enumerate() {
@@ -528,6 +531,28 @@ impl AppView {
         }
         row = row.child(buttons);
         row
+    }
+
+    /// A choice row whose visible labels differ from the stored values, e.g.
+    /// native language names ("العربية") mapped to locale codes ("ar").
+    fn choices_named(
+        &self,
+        label: &'static str,
+        options: &'static [(&'static str, &'static str)],
+        current: &str,
+        setter: fn(&str, &mut Self),
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let row = div().flex().flex_col().gap_1().child(Label::new(label).text_sm());
+        let mut buttons = div().flex().flex_row().gap_1().flex_wrap();
+        for (value, display) in options {
+            let (value, display) = (*value, *display);
+            let selected = value == current;
+            buttons = buttons.child(Button::new(format!("{}-{}", label, value)).label(display)
+                .when(selected, |b| b.primary())
+                .on_click(cx.listener(move |this, _, _, cx| { setter(value, this); cx.notify(); })));
+        }
+        row.child(buttons)
     }
 
     fn render_about(&self, cx: &mut Context<Self>) -> impl IntoElement {

@@ -1493,6 +1493,21 @@
       }
     } catch (e) {}
 
+    // Present the whole list highest quality first (audio / unlabeled last),
+    // regardless of the order in which the various sources contributed rows.
+    const qualityHeight = (it) => {
+      const m = String(it.quality || "").match(/(\d{3,4})p/i);
+      return m ? parseInt(m[1], 10) : -1;
+    };
+    items.sort((a, b) => {
+      const ha = qualityHeight(a), hb = qualityHeight(b);
+      if (ha !== hb) return hb - ha;
+      // For equal/unknown heights keep audio at the very end.
+      const aa = String(a.quality || "").toLowerCase() === "audio" ? 1 : 0;
+      const ab = String(b.quality || "").toLowerCase() === "audio" ? 1 : 0;
+      return aa - ab;
+    });
+
     // Keep the full ladder available (IDM shows all qualities too).
     return items.slice(0, 24);
   }

@@ -93,6 +93,10 @@ fn main() -> anyhow::Result<()> {
         .run(move |cx| {
         gpui_kit::init(cx);
 
+        // Mirror the UI when the saved language is RTL (e.g. Arabic).
+        let language = app_runtime.settings.lock().language.clone();
+        gpui_kit::base::LayoutDirection::from_locale(&language).set_global(cx);
+
         gpui_kit::open_window(
             WindowOptions {
                 window_bounds: Some(saved_window_bounds),

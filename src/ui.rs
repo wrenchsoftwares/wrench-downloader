@@ -2,6 +2,7 @@ use crate::engine::{DownloadStore, EngineHandle, EngineCommand, UiEvent};
 use crate::localization::Localization;
 use crate::model::{self, DownloadItem, DownloadStatus, Settings};
 use gpui::prelude::FluentBuilder;
+use gpui_kit::base::LogicalStyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputState};
@@ -188,6 +189,7 @@ impl AppView {
         *self.runtime.settings.lock() = draft.clone();
         draft.save();
         self.runtime.localization.reload(&draft.language);
+        gpui_kit::base::LayoutDirection::from_locale(&draft.language).set_global(cx);
         self.settings_open = false;
         self.status = self.tr("main.settingsSaved");
         model::save_history(&self.snapshot_items());
@@ -235,7 +237,7 @@ impl Render for AppView {
 impl AppView {
     fn render_header(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
-        div().flex().flex_row().items_center().gap_3().px_5().py_3()
+        div().flex_row_dir(cx).items_center().gap_3().px_5().py_3()
             .border_b_1().border_color(theme.border)
             .child(Label::new("🔧").text_xl())
             .child(Label::new("Wrench Downloader").text_lg())
@@ -254,7 +256,7 @@ impl AppView {
         let items = self.runtime.store.list();
         let selected = items.iter().filter(|i| i.lock().selected).count();
         let active = items.iter().filter(|i| i.lock().status.is_active()).count();
-        div().flex().flex_row().items_center().gap_2().px_5().py_2()
+        div().flex_row_dir(cx).items_center().gap_2().px_5().py_2()
             .bg(theme.background)
             .border_b_1().border_color(theme.border)
             .child(Label::new(format!("{} downloads • {} active • {} selected", items.len(), active, selected)).text_sm())
@@ -312,7 +314,7 @@ impl AppView {
             .bg(theme.background)
             .flex().flex_col().gap_2()
             .child(
-                div().flex().flex_row().gap_2()
+                div().flex_row_dir(cx).gap_2()
                     .child(Checkbox::new(format!("select-{}", id)).checked(selected)
                         .on_change(cx.listener({
                             let store = self.runtime.store.clone();
@@ -327,14 +329,14 @@ impl AppView {
             )
             .child(Progress::new(format!("progress-{}", id)).value(snapshot.progress as f32))
             .child(
-                div().flex().flex_row().gap_3()
+                div().flex_row_dir(cx).gap_3()
                     .child(Label::new(&snapshot.status_text).text_sm().flex_1().text_color(theme.muted_foreground).id(format!("status-{}", id)))
                     .child(Label::new(format!("{} • {}", snapshot.size_text, snapshot.eta_text)).text_xs().text_color(theme.muted_foreground).id(format!("size-{}", id)))
             );
         if snapshot.status != DownloadStatus::Completed {
             let action = snapshot.action_glyph().to_string();
             card = card.child(
-                div().flex().flex_row().justify_end()
+                div().flex_row_dir(cx).justify_flex_end()
                     .child(Button::new(format!("toggle-{}", id)).label(action)
                         .on_click(cx.listener({
                             let id2 = id.clone();
@@ -465,12 +467,12 @@ impl AppView {
                     .border_1().border_color(theme.border).flex().flex_col()
                     .child(div().px_5().py_3().border_b_1().border_color(theme.border)
                         .child(Label::new("Settings").text_lg()))
-                    .child(div().flex_1().min_h_0().flex().flex_row()
+                    .child(div().flex_1().min_h_0().flex_row_dir(cx)
                         .child(div().w(px(200.)).flex().flex_col().gap_1().p_3()
-                            .border_r_1().border_color(theme.border)
+                            .border_e(px(1.), cx).border_color(theme.border)
                             .child(tab_list))
                         .child(content.min_w_0()))
-                    .child(div().flex().flex_row().justify_end().gap_2().p_4().border_t_1().border_color(theme.border)
+                    .child(div().flex_row_dir(cx).justify_flex_end().gap_2().p_4().border_t_1().border_color(theme.border)
                         .child(Button::new("settings-cancel").label("Cancel")
                             .on_click(cx.listener(|this, _, _, cx| { this.settings_open = false; cx.notify(); })))
                         .child(Button::new("settings-save").primary().label("Save")
@@ -491,9 +493,9 @@ impl AppView {
         let plus = (value + 1).min(max);
         let key_minus = format!("{}-minus", label);
         let key_plus = format!("{}-plus", label);
-        div().flex().flex_row().items_center().justify_between()
+        div().flex_row_dir(cx).items_center().justify_between()
             .child(Label::new(label).text_sm())
-            .child(div().flex().flex_row().items_center().gap_2()
+            .child(div().flex_row_dir(cx).items_center().gap_2()
                 .child(Button::new(key_minus).label("−").disabled(value <= min)
                     .on_click(cx.listener(move |this, _, _, cx| { setter(minus, this); cx.notify(); })))
                 .child(Label::new(value.to_string()).text_sm())
@@ -521,7 +523,7 @@ impl AppView {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let mut row = div().flex().flex_col().gap_1().child(Label::new(label).text_sm());
-        let mut buttons = div().flex().flex_row().gap_1();
+        let mut buttons = div().flex_row_dir(cx).gap_1();
         for option in options {
             let option = *option;
             let selected = option == current;
@@ -544,7 +546,7 @@ impl AppView {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let row = div().flex().flex_col().gap_1().child(Label::new(label).text_sm());
-        let mut buttons = div().flex().flex_row().gap_1().flex_wrap();
+        let mut buttons = div().flex_row_dir(cx).gap_1().flex_wrap();
         for (value, display) in options {
             let (value, display) = (*value, *display);
             let selected = value == current;
@@ -564,7 +566,7 @@ impl AppView {
                 .child(Label::new("Wrench Downloader").text_lg())
                 .child(Label::new("Version 26.4.4 (Rust + GPUI Kit)").text_sm())
                 .child(Label::new("A download manager that intercepts browser downloads and captures video streams structurally.").text_sm())
-                .child(div().flex().flex_row().justify_end().pt_3()
+                .child(div().flex_row_dir(cx).justify_flex_end().pt_3()
                     .child(Button::new("about-close").primary().label("Close")
                         .on_click(cx.listener(|this, _, _, cx| { this.about_open = false; cx.notify(); })))))
     }
@@ -590,7 +592,7 @@ impl AppView {
                 .child(Label::new("Torrent Files").text_lg())
                 .child(Label::new(&picker.name).text_sm())
                 .child(rows)
-                .child(div().flex().flex_row().justify_end().gap_2()
+                .child(div().flex_row_dir(cx).justify_flex_end().gap_2()
                     .child(Button::new("torrent-cancel").label("Cancel")
                         .on_click(cx.listener(|this, _, _, cx| { this.torrent_picker = None; cx.notify(); })))
                     .child(Button::new("torrent-start").primary().label("Start Download")
@@ -610,7 +612,7 @@ impl AppView {
             .child(div().w(px(380.)).p_5().rounded_lg().bg(theme.background)
                 .border_1().border_color(theme.border).flex().flex_col().gap_3()
                 .child(Label::new("Delete this file from disk?").text_sm())
-                .child(div().flex().flex_row().justify_end().gap_2()
+                .child(div().flex_row_dir(cx).justify_flex_end().gap_2()
                     .child(Button::new("delete-cancel").label("Cancel")
                         .on_click(cx.listener(|this, _, _, cx| { this.confirm_delete = None; cx.notify(); })))
                     .child(Button::new("delete-confirm").danger().label("Delete")

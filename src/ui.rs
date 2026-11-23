@@ -6,6 +6,7 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::label::Label;
+use gpui_kit::component::list::ListItem;
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::{ActiveTheme, Disableable};
 use gpui_kit::*;
@@ -434,20 +435,38 @@ impl AppView {
                         |v, this| this.settings_draft.language = v.to_string(), cx));
             }
         }
+        // Categories are a real selectable list on the left; only the content
+        // pane changes, so Save/Cancel stay in a stable footer.
         let tabs = ["Downloads", "Behavior", "Browser integration", "Appearance"];
-        let mut tab_bar = div().flex().flex_row().gap_1();
+        let weak = cx.entity().downgrade();
+        let mut tab_list = div().flex().flex_col().gap_1();
         for (i, name) in tabs.iter().enumerate() {
-            tab_bar = tab_bar.child(Button::new(format!("tab-{}", i)).label(*name)
-                .when(i == tab, |b| b.primary())
-                .on_click(cx.listener(move |this, _, _, cx| { this.settings_tab = i; cx.notify(); })));
+            let weak = weak.clone();
+            tab_list = tab_list.child(
+                ListItem::new(format!("settings-tab-{}", i))
+                    .accessibility_label(*name)
+                    .selected(i == tab)
+                    .on_click(move |_, _, app| {
+                        let _ = weak.update(app, |this, cx| {
+                            this.settings_tab = i;
+                            cx.notify();
+                        });
+                    })
+                    .child(Label::new(*name)),
+            );
         }
         div().absolute().inset_0().flex().items_center().justify_center()
             .bg(gpui::black().alpha(0.55))
             .child(
                 div().w(px(760.)).h(px(620.)).rounded_lg().bg(theme.background)
                     .border_1().border_color(theme.border).flex().flex_col()
-                    .child(div().px_4().pt_3().child(tab_bar))
-                    .child(content)
+                    .child(div().px_5().py_3().border_b_1().border_color(theme.border)
+                        .child(Label::new("Settings").text_lg()))
+                    .child(div().flex_1().min_h_0().flex().flex_row()
+                        .child(div().w(px(200.)).flex().flex_col().gap_1().p_3()
+                            .border_r_1().border_color(theme.border)
+                            .child(tab_list))
+                        .child(content.min_w_0()))
                     .child(div().flex().flex_row().justify_end().gap_2().p_4().border_t_1().border_color(theme.border)
                         .child(Button::new("settings-cancel").label("Cancel")
                             .on_click(cx.listener(|this, _, _, cx| { this.settings_open = false; cx.notify(); })))

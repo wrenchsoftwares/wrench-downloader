@@ -406,7 +406,7 @@ impl AppView {
                     .child(self.choices("Display mode", &["system", "light", "dark"], &self.settings_draft.app_theme.clone(),
                         |v, this| this.settings_draft.app_theme = v.to_string(), cx))
                     .child(self.choices_named("Language", &[
-                        ("en", "English"), ("fr", "Français"), ("ar", "العربية"),
+                        ("en", "English"), ("fr", "Français"), ("ar", "\u{2067}العربية\u{2069}"),
                     ], &self.settings_draft.language.clone(),
                         |v, this| this.settings_draft.language = v.to_string(), cx));
             }

@@ -26,6 +26,13 @@ fn main() -> anyhow::Result<()> {
         .init();
     paths::Paths::init();
 
+    // If the app is already running (possibly hidden in the tray), just show
+    // that instance instead of starting a second one.
+    if !platform::is_first_instance() {
+        platform::focus_existing();
+        return Ok(());
+    }
+
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .worker_threads(4)
@@ -80,6 +87,7 @@ fn main() -> anyhow::Result<()> {
             },
             cx,
             |window, cx| {
+                window.set_window_title("Wrench Downloader");
                 let runtime = app_runtime.clone();
                 let url_input = cx.new(|cx| InputState::new(window, cx).placeholder("Paste download or video URL..."));
                 let settings_folder = cx.new(|cx| InputState::new(window, cx));

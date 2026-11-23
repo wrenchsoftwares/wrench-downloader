@@ -3,7 +3,17 @@ const APP_HEALTH_URL = "http://127.0.0.1:45732/api/health";
 
 document.addEventListener("DOMContentLoaded", async () => {
   const statusEl = document.getElementById("appStatus");
+  const startAppBtn = document.getElementById("startAppBtn");
   const listEl = document.getElementById("mediaList");
+
+  // Registered by the installer: opening this URL launches the desktop app.
+  if (startAppBtn) {
+    startAppBtn.addEventListener("click", () => {
+      chrome.tabs.create({ url: "wrench://launch" });
+      statusEl.textContent = "Starting App...";
+      window.close();
+    });
+  }
   const interceptToggle = document.getElementById("interceptToggle");
 
   // Load intercept downloads preference
@@ -22,12 +32,16 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (res.ok) {
       statusEl.textContent = "App Connected";
       statusEl.classList.remove("status-offline");
+      if (startAppBtn) startAppBtn.style.display = "none";
     } else {
       throw new Error();
     }
   } catch (e) {
     statusEl.textContent = "App Offline";
     statusEl.classList.add("status-offline");
+    // Offer a one-click launch; Chrome needs a user gesture for external schemes.
+    if (startAppBtn) startAppBtn.style.display = "block";
+    try { chrome.runtime.sendMessage({ action: "APP_OFFLINE" }); } catch (err) {}
   }
 
   // Get active tab

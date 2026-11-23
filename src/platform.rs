@@ -106,6 +106,46 @@ mod tray {
     static TARGET_PID: AtomicU32 = AtomicU32::new(0);
     static ORIGINAL_PROC: AtomicIsize = AtomicIsize::new(0);
     pub(crate) static TRAY_TX: OnceLock<UnboundedSender<UiEvent>> = OnceLock::new();
+    static MUTEX_HANDLE: OnceLock<isize> = OnceLock::new();
+
+    /// False when another instance already owns the single-instance mutex.
+    pub(crate) fn is_first_instance() -> bool {
+        unsafe {
+            let name = "WrenchDownloader_SingleInstance\0".encode_utf16().collect::<Vec<_>>();
+            let handle = CreateMutexW(std::ptr::null(), 1, name.as_ptr());
+            let first = GetLastError() != 183; // ERROR_ALREADY_EXISTS
+            let _ = MUTEX_HANDLE.set(handle);
+            first
+        }
+    }
+
+    /// Bring an already-running (possibly tray-hidden) instance to the front.
+    pub(crate) fn focus_existing() -> bool {
+        unsafe {
+            let title = "Wrench Downloader\0".encode_utf16().collect::<Vec<_>>();
+            let hwnd = FindWindowW(std::ptr::null(), title.as_ptr());
+            if hwnd == 0 { return false; }
+            ShowWindow(hwnd, SW_RESTORE);
+            SetForegroundWindow(hwnd);
+            true
+        }
+    }
+
+    unsafe fn load_app_icon(size: i32) -> isize {
+        if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+            let path = dir.join("app.ico");
+            let wide = path.to_string_lossy().encode_utf16().chain(std::iter::once(0)).collect::<Vec<_>>();
+            let icon = LoadImageW(0, wide.as_ptr(), 1, size, size, 0x10); // IMAGE_ICON | LR_LOADFROMFILE
+            if icon != 0 { return icon; }
+        }
+        LoadIconW(0, 32512usize as *const u16) // IDI_APPLICATION fallback
+    }
+
+    unsafe fn set_window_icons(hwnd: Hwnd) {
+        const WM_SETICON: u32 = 0x0080;
+        SendMessageW(hwnd, WM_SETICON, 0, load_app_icon(16)); // ICON_SMALL
+        SendMessageW(hwnd, WM_SETICON, 1, load_app_icon(32)); // ICON_BIG
+    }
 
     #[repr(C)]
     #[derive(Default)]
@@ -198,6 +238,14 @@ mod tray {
     unsafe extern "system" {
         fn GetCurrentProcessId() -> u32;
         fn GetModuleHandleW(lpModuleName: *const u16) -> isize;
+        fn GetLastError() -> u32;
+        fn CreateMutexW(lpAttributes: *const c_void, bInitialOwner: i32, lpName: *const u16) -> isize;
+    }
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> Hwnd;
+        fn SendMessageW(hWnd: Hwnd, Msg: u32, wParam: usize, lParam: isize) -> isize;
+        fn LoadImageW(hInst: isize, lpszName: *const u16, uType: u32, cx: i32, cy: i32, fuLoad: u32) -> isize;
     }
 
     unsafe extern "system" fn enum_windows_proc(hwnd: Hwnd, _: isize) -> i32 {
@@ -283,6 +331,7 @@ mod tray {
         }
         let main_hwnd = FOUND_HWND.load(Ordering::Relaxed);
         if main_hwnd != 0 {
+            set_window_icons(main_hwnd);
             let prev = SetWindowLongPtrW(main_hwnd, GWLP_WNDPROC, main_subclass_proc as isize);
             ORIGINAL_PROC.store(prev, Ordering::Relaxed);
         }
@@ -304,7 +353,7 @@ mod tray {
             hwnd: tray_hwnd, u_id: 1,
             u_flags: NIF_MESSAGE | NIF_ICON | NIF_TIP,
             u_callback_message: WM_TRAYICON,
-            h_icon: LoadIconW(0, 32512usize as *const u16),
+            h_icon: load_app_icon(16),
             ..Default::default()
         };
         let tip = "Wrench Downloader\0".encode_utf16().collect::<Vec<_>>();
@@ -324,6 +373,21 @@ mod tray {
         }
         DestroyWindow(tray_hwnd);
     }
+}
+
+/// Single-instance gate. A second launch focuses the existing window instead.
+pub fn is_first_instance() -> bool {
+    #[cfg(target_os = "windows")]
+    { tray::is_first_instance() }
+    #[cfg(not(target_os = "windows"))]
+    { true }
+}
+
+pub fn focus_existing() -> bool {
+    #[cfg(target_os = "windows")]
+    { tray::focus_existing() }
+    #[cfg(not(target_os = "windows"))]
+    { false }
 }
 
 /// Start the release-only system tray. Debug builds intentionally have no tray.

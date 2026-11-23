@@ -19,6 +19,7 @@ if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
 
 Copy-Item (Join-Path $releaseDir "wrench-downloader.exe") $stage -Force
+Copy-Item (Join-Path $root "Assets\AppIcon.ico") (Join-Path $stage "app.ico") -Force
 Copy-Item (Join-Path $root "Languages") (Join-Path $stage "Languages") -Recurse -Force
 Copy-Item (Join-Path $root "chrome extension") (Join-Path $stage "chrome extension") -Recurse -Force
 

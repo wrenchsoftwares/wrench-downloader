@@ -53,12 +53,16 @@ Name: "startup"; Description: "Start Wrench Downloader with Windows (minimized t
 Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\Wrench Downloader"; Filename: "{app}\{#MyAppExe}"
-Name: "{autodesktop}\Wrench Downloader"; Filename: "{app}\{#MyAppExe}"; Tasks: desktopicon
+Name: "{autoprograms}\Wrench Downloader"; Filename: "{app}\{#MyAppExe}"; IconFilename: "{app}\app.ico"
+Name: "{autodesktop}\Wrench Downloader"; Filename: "{app}\{#MyAppExe}"; IconFilename: "{app}\app.ico"; Tasks: desktopicon
 
 [Registry]
 ; Optional Start-with-Windows entry; the app starts hidden with its tray icon.
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "WrenchDownloader"; ValueData: """{app}\{#MyAppExe}"" --background"; Tasks: startup; Flags: uninsdeletevalue
+; Custom protocol lets the browser companion launch the app when it is offline.
+Root: HKCR; Subkey: "wrench"; ValueType: string; ValueName: ""; ValueData: "URL:Wrench Downloader"; Flags: uninsdeletekey
+Root: HKCR; Subkey: "wrench"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKCR; Subkey: "wrench\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExe}"" ""%1"""
 ; Magnet-link ownership (magnet-button clicks open Wrench Downloader).
 Root: HKCR; Subkey: "magnet"; ValueType: string; ValueName: ""; ValueData: "URL:Magnet Protocol"; Flags: uninsdeletekey
 Root: HKCR; Subkey: "magnet"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""

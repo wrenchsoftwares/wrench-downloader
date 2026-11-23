@@ -184,7 +184,17 @@ Dev smoke test with portable data (keeps `%LOCALAPPDATA%` untouched):
 - `UiEvent::TraySettings` and `UiEvent::TrayExit` bridge tray actions to the UI;
   the main event loop handles `TrayExit` with `cx.quit()`.
 - `--background` / `/background` starts with `WindowOptions.show = false`,
-  `focus = false`; the installer can add the HKCU Run entry with that flag.
+  `focus = false`; the installer adds the HKCU Run entry with that flag.
+- Single instance: a named mutex (`WrenchDownloader_SingleInstance`) makes a
+  second launch call `focus_existing()` (FindWindowW by title `Wrench Downloader`
+  + ShowWindow(SW_RESTORE)) and exit. Set the window title with
+  `window.set_window_title("Wrench Downloader")` so FindWindowW can find it.
+- The companion extension checks `/api/health`; when offline it offers a
+  "Start Wrench Downloader" button and tries `wrench://launch`. The installer
+  registers the `wrench:` protocol to the app exe.
+- Icons: `Assets/AppIcon.ico` is generated from `logo.png` (16–256 px). It is
+  staged as `app.ico`, used for the Start/desktop shortcuts (`IconFilename`),
+  the tray icon, and the window/taskbar icons via `WM_SETICON` on the main HWND.
 - Verified: sending WM_CLOSE leaves the process alive with the window hidden;
   `--background` starts with zero visible windows and the bridge still up.
 

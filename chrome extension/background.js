@@ -7,6 +7,23 @@ const mediaByTab = new Map();
 const requestHeadersMap = new Map(); // url -> { referer, userAgent }
 const contentDispositionMap = new Map(); // url -> server filename
 const APP_SERVER_URL = "http://127.0.0.1:45732/api/download";
+const APP_HEALTH_URL = "http://127.0.0.1:45732/api/health";
+
+// If the local bridge is down, ask Windows to launch the app through the
+// installer-registered wrench: protocol. Chrome may require a user gesture,
+// so the popup also exposes an explicit "Start" button as a fallback.
+async function ensureDesktopAppRunning() {
+  try {
+    const res = await fetch(APP_HEALTH_URL, { cache: "no-store" });
+    if (res.ok) return true;
+  } catch (e) {}
+  try {
+    await chrome.tabs.create({ url: "wrench://launch" });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
 // Latest browser-minted PO token per tab, harvested from videoplayback URLs
 // (their pot= parameter). The playing browser already passed every gate, so
 // its token + session is exactly what the desktop app needs and cannot mint.
@@ -610,6 +627,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.action === "APP_OFFLINE") {
+    ensureDesktopAppRunning()
+      .then((started) => sendResponse({ started }))
+      .catch(() => sendResponse({ started: false }));
+    return true;
+  }
+
   if (message.action === "SEND_TO_APP") {
     const sendTabId = sender.tab ? sender.tab.id : message.tabId;
     try {
@@ -702,6 +726,7 @@ async function sendToDesktopApp(payload, tabId) {
     return await response.json();
   } catch (error) {
     console.error("Failed to connect to Wrench Downloader Desktop App:", error);
+    ensureDesktopAppRunning().catch(() => {});
     throw error;
   }
 }

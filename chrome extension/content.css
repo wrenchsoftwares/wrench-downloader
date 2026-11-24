@@ -1,35 +1,47 @@
-/* Wrench Downloader Video Overlay Styling - small icon box outside video */
+/* Wrench Downloader Video Overlay Styling - compact icon box outside video */
 .wrench-video-overlay-btn {
   position: absolute;
   z-index: 2147483647;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 22px;
+  height: 22px;
   background: rgba(18, 20, 24, 0.92);
   color: #ffffff;
   border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 6px;
+  border-radius: 5px;
   padding: 0;
-  cursor: pointer;
+  cursor: grab;
+  touch-action: none;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
   backdrop-filter: blur(8px);
-  transition: all 0.2s ease;
+  transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
   user-select: none;
 }
 
 .wrench-video-overlay-btn:hover {
   background: #0078d4;
   border-color: #0078d4;
-  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(0, 120, 212, 0.5);
+}
+
+.wrench-video-overlay-btn:active {
+  cursor: grabbing;
+}
+
+.wrench-video-overlay-btn.wrench-dragging {
+  cursor: grabbing;
+  background: #0078d4;
+  border-color: #0078d4;
   box-shadow: 0 6px 16px rgba(0, 120, 212, 0.5);
 }
 
 .wrench-icon {
-  width: 16px;
-  height: 16px;
+  width: 12px;
+  height: 12px;
   fill: currentColor;
+  pointer-events: none;
 }
 
 .wrench-dropdown-menu {

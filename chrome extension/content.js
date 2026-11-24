@@ -350,15 +350,25 @@
         if (currentOpenMenu) currentOpenMenu.remove();
         return;
       }
-      
+
       const rect = video.getBoundingClientRect();
-      if (rect.width === 0 && rect.height === 0) {
+      if (rect.width === 0 && rect.height === 0 && !btn._wrenchDragged) {
         btn.style.display = "none";
         return;
       }
 
+      // A dragged button keeps its dropped position: stop re-anchoring it to
+      // the video on scroll/resize, but keep an open menu attached to it.
+      if (btn._wrenchDragged) {
+        btn.style.display = "flex";
+        if (currentOpenMenu && currentOpenMenu._btn === btn) {
+          positionDropdownMenu(currentOpenMenu, btn);
+        }
+        return;
+      }
+
       // Position small icon box OUTSIDE video border (above top-right corner)
-      const BTN_SIZE = 30;
+      const BTN_SIZE = 22;
       const GAP = 6;
       const videoTop = window.scrollY + rect.top;
       const videoRight = window.scrollX + rect.right;
@@ -396,9 +406,64 @@
     setTimeout(updatePosition, 300);
     setTimeout(updatePosition, 1000);
 
+    // Drag the button anywhere; once dragged it stays put. Suppress the click
+    // that would otherwise open the dropdown at the end of a drag gesture.
+    let dragStart = null;
+    let dragMoved = false;
+
+    btn.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      e.stopPropagation();
+      dragMoved = false;
+      const box = btn.getBoundingClientRect();
+      dragStart = {
+        clientX: e.clientX,
+        clientY: e.clientY,
+        left: parseFloat(btn.style.left) || (box.left + window.scrollX),
+        top: parseFloat(btn.style.top) || (box.top + window.scrollY)
+      };
+      try { btn.setPointerCapture(e.pointerId); } catch (err) {}
+    });
+
+    btn.addEventListener("pointermove", (e) => {
+      if (!dragStart) return;
+      const dx = e.clientX - dragStart.clientX;
+      const dy = e.clientY - dragStart.clientY;
+      if (!dragMoved && Math.abs(dx) + Math.abs(dy) < 4) return;
+      if (!dragMoved) {
+        dragMoved = true;
+        btn._wrenchDragged = true;
+        btn.classList.add("wrench-dragging");
+      }
+      const maxLeft = window.scrollX + window.innerWidth - btn.offsetWidth - 2;
+      const maxTop = window.scrollY + window.innerHeight - btn.offsetHeight - 2;
+      btn.style.left = `${Math.max(window.scrollX + 2, Math.min(dragStart.left + dx, maxLeft))}px`;
+      btn.style.top = `${Math.max(window.scrollY + 2, Math.min(dragStart.top + dy, maxTop))}px`;
+      if (currentOpenMenu && currentOpenMenu._btn === btn) {
+        positionDropdownMenu(currentOpenMenu, btn);
+      }
+    });
+
+    function endDrag(e) {
+      if (!dragStart) return;
+      try { btn.releasePointerCapture(e.pointerId); } catch (err) {}
+      dragStart = null;
+      if (dragMoved) {
+        btn.classList.remove("wrench-dragging");
+        btn._wrenchSuppressClick = true;
+        setTimeout(() => { btn._wrenchSuppressClick = false; }, 300);
+      }
+    }
+    btn.addEventListener("pointerup", endDrag);
+    btn.addEventListener("pointercancel", endDrag);
+
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       e.preventDefault();
+      if (btn._wrenchSuppressClick) {
+        btn._wrenchSuppressClick = false;
+        return;
+      }
       activeVideo = video;
       toggleDropdown(video, btn);
     });

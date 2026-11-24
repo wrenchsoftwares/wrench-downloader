@@ -93,9 +93,13 @@ fn main() -> anyhow::Result<()> {
         .run(move |cx| {
         gpui_kit::init(cx);
 
-        // Mirror the UI when the saved language is RTL (e.g. Arabic).
-        let language = app_runtime.settings.lock().language.clone();
-        gpui_kit::base::LayoutDirection::from_locale(&language).set_global(cx);
+        // Apply saved appearance choices before the first window is built:
+        // mirror RTL languages and restore light/dark/system mode.
+        {
+            let settings = app_runtime.settings.lock();
+            ui::apply_language(&app_runtime.localization, &settings.language, cx);
+            ui::apply_theme(&settings.app_theme, cx);
+        }
 
         gpui_kit::open_window(
             WindowOptions {
@@ -108,7 +112,8 @@ fn main() -> anyhow::Result<()> {
             |window, cx| {
                 window.set_window_title("Wrench Downloader");
                 let runtime = app_runtime.clone();
-                let url_input = cx.new(|cx| InputState::new(window, cx).placeholder("Paste download or video URL..."));
+                let url_placeholder = runtime.localization.get("main.urlPlaceholder");
+                let url_input = cx.new(|cx| InputState::new(window, cx).placeholder(url_placeholder));
                 let settings_folder = cx.new(|cx| InputState::new(window, cx));
                 let view = cx.new(|_| ui::AppView::new(runtime, url_input, settings_folder));
 

@@ -32,6 +32,10 @@ impl PromptView {
         Self { runtime, item, title_input, folder_input, playlist, later }
     }
 
+    fn tr(&self, key: &str) -> String { self.runtime.localization.get(key) }
+
+    fn fmt(&self, key: &str, args: &[&str]) -> String { self.runtime.localization.format(key, args) }
+
     fn start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let title = self.title_input.read(cx).value().trim().to_string();
         let folder = self.folder_input.read(cx).value().trim().to_string();
@@ -43,7 +47,7 @@ impl PromptView {
         item.scheduled_at = None;
         item.queue_name = "Main queue".into();
         item.status = DownloadStatus::Queued;
-        item.status_text = if self.later { "Saved for later in Main queue".into() } else { "Waiting in queue".into() };
+        item.status_text = if self.later { self.tr("queue.savedForLater") } else { self.tr("download.queued") };
 
         let id = item.id.clone();
         paths::log_line(&format!("prompt start clicked for {}", id));
@@ -51,14 +55,14 @@ impl PromptView {
         if !self.later {
             self.runtime.engine.start(&id);
         }
-        let message = if self.later { "Download saved for later".to_string() } else { format!("Started {}", self.item.title) };
+        let message = if self.later { self.tr("prompt.savedForLaterStatus") } else { self.fmt("main.started", &[&self.item.title]) };
         let _ = self.runtime.ui_tx.send(UiEvent::Status(message));
         window.remove_window();
     }
 
     fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         paths::log_line(&format!("prompt cancelled for {}", self.item.id));
-        let _ = self.runtime.ui_tx.send(UiEvent::Status("Download cancelled".into()));
+        let _ = self.runtime.ui_tx.send(UiEvent::Status(self.tr("prompt.cancelled")));
         let _ = cx;
         window.remove_window();
     }
@@ -68,31 +72,31 @@ impl Render for PromptView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let url = if self.item.page_url == self.item.url && !self.item.page_url.is_empty() {
-            "Fresh stream capture pending - choose Start to resolve it.".to_string()
+            self.tr("prompt.pendingCapture")
         } else {
             self.item.url.clone()
         };
         div().size_full().p_5().bg(theme.background).text_color(theme.foreground)
             .flex().flex_col().gap_3()
-            .child(Label::new("Start Download").text_lg())
-            .child(Label::new("File name").text_sm())
+            .child(Label::new(self.tr("prompt.start")).text_lg())
+            .child(Label::new(self.tr("prompt.fileName")).text_sm())
             .child(Input::new(&self.title_input))
-            .child(Label::new("URL").text_sm())
+            .child(Label::new(self.tr("prompt.url")).text_sm())
             .child(div().max_h(px(90.)).p_2().rounded_md().bg(theme.input_background())
                 .child(Label::new(url).text_sm().text_color(theme.muted_foreground)))
-            .child(Checkbox::new("prompt-playlist").label("Download the full playlist")
+            .child(Checkbox::new("prompt-playlist").label(self.tr("prompt.playlist"))
                 .checked(self.playlist)
                 .on_change(cx.listener(|this, v: &bool, _, cx| { this.playlist = *v; cx.notify(); })))
-            .child(Label::new("Save folder").text_sm())
+            .child(Label::new(self.tr("prompt.saveFolder")).text_sm())
             .child(Input::new(&self.folder_input))
-            .child(Checkbox::new("prompt-later").label("Download later")
+            .child(Checkbox::new("prompt-later").label(self.tr("prompt.downloadLater"))
                 .checked(self.later)
                 .on_change(cx.listener(|this, v: &bool, _, cx| { this.later = *v; cx.notify(); })))
             .child(div().flex().flex_row().justify_end().gap_2().pt_2()
-                .child(Button::new("prompt-cancel").label("Cancel")
+                .child(Button::new("prompt-cancel").label(self.tr("prompt.cancel"))
                     .on_click(cx.listener(|this, _, window, cx| this.cancel(window, cx))))
                 .child(Button::new("prompt-start").primary()
-                    .label(if self.later { "Save for later" } else { "Start Download" })
+                    .label(if self.later { self.tr("prompt.saveForLater") } else { self.tr("prompt.startButton") })
                     .on_click(cx.listener(|this, _, window, cx| this.start(window, cx)))))
     }
 }

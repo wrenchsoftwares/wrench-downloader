@@ -48,6 +48,12 @@ shell-words = "1"
 async-trait = "0.1"
 arboard = "3"
 
+# Patched Windows text backend: GPUI 0.3.12 never sets DirectWrite's reading
+# direction, so RTL scripts render with reversed glyph order. The vendored copy
+# detects RTL text and sets DWRITE_READING_DIRECTION_RIGHT_TO_LEFT.
+[patch.crates-io]
+gpui-pre-windows = { path = "vendor/gpui-pre-windows" }
+
 [profile.release]
 opt-level = 3
 lto = "thin"
